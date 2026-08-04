@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["model", "leptos"]
+
+# The pin family every crate in this workspace must resolve within — the
+# ankurah 0.9.0 arrangement, exactly as community's leptos-app and the
+# ankurah-xray crate pin it. These are declared here (unused until the
+# component copy-out lands) so the constraint is executable from day one;
+# see ~/ak/x-ray/Cargo.toml for the full reasoning on each ceiling.
+#
+# - leptos 0.8.15+ pulls server_fn → wasm-streams → js-sys ^0.3.85, but
+#   js-sys/web-sys are pinned =0.3.82 by ankurah-signals 0.9.0. Raise both
+#   ends together or not at all.
+# - leptos_macro is held below 0.8.15 because 0.8.17 emits a symbol the
+#   0.8.14 runtime lacks while declaring compatibility.
+# - Leptos stays feature-free in libraries: csr/hydrate/ssr are the
+#   CONSUMER's choice.
+[workspace.dependencies]
+ankurah = { version = "0.9.0", features = ["wasm"] }
+ankurah-signals = "0.9.0"
+leptos = { version = ">=0.8.12, <=0.8.14", default-features = false }
+leptos_macro = { version = ">=0.8.12, <0.8.15" }
+wasm-bindgen = "=0.2.105"
+web-sys = "=0.3.82"
+js-sys = "=0.3.82"
+wasm-bindgen-futures = "=0.4.55"
+getrandom = { version = "0.3", features = ["wasm_js"] }

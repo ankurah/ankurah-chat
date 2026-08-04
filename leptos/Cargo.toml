@@ -1,0 +1,9 @@
+[package]
+name = "ankurah-chat-leptos"
+version = "0.1.0"
+edition = "2024"
+description = "Embeddable Leptos chat components for Ankurah: room log, composer, room selector, DM thread."
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]

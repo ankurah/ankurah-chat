@@ -1,0 +1,9 @@
+[package]
+name = "ankurah-chat-model"
+version = "0.1.0"
+edition = "2024"
+description = "Chat data model for ankurah-chat: collections and the shared mention/URL scanner."
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
