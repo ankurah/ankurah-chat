@@ -26,7 +26,7 @@
 //! See the `DmReadState` model doc for what a deployment's policy owes that.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use ankurah::{changes::ChangeSet, EntityId, LiveQuery};
 use ankurah_signals::{Get, Mut, Peek, Subscribe, SubscriptionGuard};
@@ -166,6 +166,13 @@ struct Inner {
     _cursors_guard: Mutex<Option<SubscriptionGuard>>,
 }
 
+/// The manager's own handle on itself, for a callback that must not keep it
+/// alive — see [`crate::read_state`], which spells out why every subscription
+/// here holds a weak one. The stake is higher on this side: a replaced manager
+/// left alive would go on WRITING, because `heal_cursor` repairs rows through
+/// the context it was built with.
+type WeakInner = Weak<Inner>;
+
 struct ThreadWindow {
     thread_id: EntityId,
     query: LiveQuery<DmMessageView>,
@@ -200,32 +207,34 @@ impl DmReadStateManager {
             _cursors_guard: Mutex::new(None),
         });
 
-        let inner_for_cursors = inner.clone();
+        let inner_for_cursors: WeakInner = Arc::downgrade(&inner);
         let cursors_guard = cursors.subscribe(move |_: ChangeSet<DmReadStateView>| {
-            Self::rebuild_cursors(&inner_for_cursors);
-            if !inner_for_cursors.ready.peek() {
-                inner_for_cursors.ready.set(true);
+            let Some(inner) = inner_for_cursors.upgrade() else { return };
+            Self::rebuild_cursors(&inner);
+            if !inner.ready.peek() {
+                inner.ready.set(true);
             }
-            Self::recompute_all(&inner_for_cursors);
+            Self::recompute_all(&inner);
         });
         *inner._cursors_guard.lock().unwrap() = Some(cursors_guard);
 
         // One newest-messages window per thread, following the threads query.
-        let inner_for_threads = inner.clone();
+        let inner_for_threads: WeakInner = Arc::downgrade(&inner);
         let threads_guard = threads.subscribe(move |changeset: ChangeSet<DmThreadView>| {
+            let Some(inner) = inner_for_threads.upgrade() else { return };
             for thread in changeset.appeared() {
-                Self::add_window(&inner_for_threads, thread.id());
+                Self::add_window(&inner, thread.id());
             }
             for thread in changeset.removed() {
                 let key = thread.id().to_base64();
-                inner_for_threads.windows.lock().unwrap().remove(&key);
-                let mut unread = inner_for_threads.unread.peek().clone();
+                inner.windows.lock().unwrap().remove(&key);
+                let mut unread = inner.unread.peek().clone();
                 if unread.remove(&key).is_some() {
-                    inner_for_threads.unread.set(unread);
+                    inner.unread.set(unread);
                 }
-                let mut newest = inner_for_threads.newest.peek().clone();
+                let mut newest = inner.newest.peek().clone();
                 if newest.remove(&key).is_some() {
-                    inner_for_threads.newest.set(newest);
+                    inner.newest.set(newest);
                 }
             }
         });
@@ -366,10 +375,11 @@ impl DmReadStateManager {
             }
         };
 
-        let inner_for_sub = inner.clone();
+        let inner_for_sub: WeakInner = Arc::downgrade(inner);
         let key_for_sub = key.clone();
         let guard = query.subscribe(move |_: ChangeSet<DmMessageView>| {
-            Self::recompute_thread(&inner_for_sub, &key_for_sub);
+            let Some(inner) = inner_for_sub.upgrade() else { return };
+            Self::recompute_thread(&inner, &key_for_sub);
         });
 
         inner.windows.lock().unwrap().insert(key.clone(), ThreadWindow { thread_id, query, _guard: guard });

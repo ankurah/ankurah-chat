@@ -35,8 +35,16 @@
 //! and rebuilding by remounting would forfeit the very state this promises to
 //! keep.
 //!
-//! A host with nothing to swap passes the value directly and pays nothing —
-//! `Live` is `#[prop(into)]`-friendly and a constant tracks nothing.
+//! A host with nothing to swap passes the value directly — `Live` is
+//! `#[prop(into)]`-friendly. A constant subscribes to nothing, which is the
+//! part that matters; it is not free, though, because every read still runs
+//! the closure and clones the handle (an `Arc` bump, for a `LiveQuery` or a
+//! cursor manager).
+//!
+//! Do the whole swap in ONE SYNCHRONOUS BLOCK: `set_session` and each handle
+//! the host replaces are separate signal writes, and components read between
+//! them if given the chance. Split across two ticks there is a moment where the
+//! session names one reader and the queries still answer for the other.
 //!
 //! WHAT DOES NOT SURVIVE, stated plainly: the timeline's loaded window. A
 //! `ScrollManager` takes its context as a constructor argument and
@@ -146,7 +154,10 @@ pub struct ChatHooks {
 /// components re-point in place.
 ///
 /// A host with nothing to swap just passes the value: `From` makes it a
-/// constant, and a constant subscribes to nothing.
+/// constant. A constant subscribes to nothing — no re-renders, no
+/// invalidations — but reading one is not free: [`Live::current`] runs the
+/// closure and clones out of the `SendWrapper` every time, which for a
+/// `LiveQuery` or a cursor manager is an `Arc` bump.
 pub struct Live<T: Clone + 'static>(ArcSignal<SendWrapper<T>>);
 
 impl<T: Clone + 'static> Clone for Live<T> {

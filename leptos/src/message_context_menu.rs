@@ -275,25 +275,31 @@ pub fn MessageContextMenu(
         let message = message.clone();
         let on_close = on_close.clone();
 
-        if !is_own {
+        // WHICH DELETE THIS IS gets decided here, not when the menu opened.
+        // `is_own` and the moderator gate were both read against whoever was
+        // signed in then; a session swapped underneath would otherwise send an
+        // author down the moderator path, or hand a reader who has since lost
+        // moderation rights the moderator's write. Community never swaps a
+        // session, so this is the crate's contract holding rather than a case
+        // that arises there.
+        let Some(session) = chat.write_session() else { return };
+        let author = message.user().ok().map(|r| r.id());
+        if author != Some(session.viewer) {
+            // Not the author. Only a moderator may go on, and only where the
+            // host said what a moderator delete means.
+            if !chat.can_moderate() {
+                tracing::warn!("refusing a delete for a message the reader did not write");
+                on_close();
+                return;
+            }
             let close: Box<dyn Fn()> = Box::new({
                 let on_close = on_close.clone();
                 move || on_close()
             });
-            if let Some(delete) = chat.hooks().moderator_delete.as_ref() {
-                delete(message, close);
+            match chat.hooks().moderator_delete.as_ref() {
+                Some(delete) => delete(message, close),
+                None => on_close(),
             }
-            return;
-        }
-
-        // `is_own` was decided when the menu opened. Re-check it against the
-        // reader the session names NOW, so a swap between the two cannot turn
-        // an author's delete into somebody else's. Community never swaps a
-        // session; this is the crate's contract holding.
-        let Some(session) = chat.write_session() else { return };
-        if message.user().ok().map(|r| r.id()) != Some(session.viewer) {
-            tracing::warn!("refusing an author delete for a message the reader did not write");
-            on_close();
             return;
         }
         wasm_bindgen_futures::spawn_local(async move {

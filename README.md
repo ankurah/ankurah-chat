@@ -69,8 +69,12 @@ ChatContext::new(context)              // your ankurah::Context
     .provide();
 install_styles();
 
-view! { <RoomLog room=selected_room current_user=me users=users read_state=cursors /> }
+view! { <RoomLog room=selected_room users=members read_state=cursors /> }
 ```
+
+`members` is a `LiveQuery<UserView>` and `cursors` a `ReadStateManager`, both
+built by you against the same context. Who the reader is comes from the
+handshake, not from a prop.
 
 The surfaces are `RoomSelector`, `RoomLog`, `Composer`, `DmSidebar` and
 `DmConversation`; mount any of them, in any combination.
@@ -104,16 +108,33 @@ to be rebuilt against the new context. Those props take a `Live`, so you swap
 what your signal holds and the components re-point in place:
 
 ```rust
-let members = RwSignal::new(context.query::<UserView>("true")?);
-view! { <RoomLog room=selected users=Live::reactive(move || members.get()) … /> }
+// Hold what you hand in, so you can swap it.
+let members = RwSignal::new(SendWrapper::new(context.query::<UserView>("true")?));
+let cursors = RwSignal::new(SendWrapper::new(ReadStateManager::new(context.clone(), rooms, me)));
 
-// on sign-in
-chat.set_session(new_context, Some(user_id));
-members.set(new_context.query::<UserView>("true")?);
+view! {
+    <RoomLog
+        room=selected_room
+        users=Live::reactive(move || members.get().take())
+        read_state=Live::reactive(move || cursors.get().take())
+    />
+}
+
+// On sign-in — ALL OF IT IN ONE SYNCHRONOUS BLOCK. Each of these is a signal
+// write, and the components read between them if you let them: a swap split
+// across two ticks leaves a moment where the session says one reader and the
+// queries still answer for the other, which is a moment where a cursor can be
+// written to the wrong rows.
+let chat = ankurah_chat_leptos::chat();
+chat.set_session(new_context.clone(), Some(user_id));
+members.set(SendWrapper::new(new_context.query::<UserView>("true")?));
+cursors.set(SendWrapper::new(ReadStateManager::new(new_context, rooms, user_id)));
 ```
 
 A host with nothing to swap passes the value directly — `Live` is
-`#[prop(into)]`-friendly and a constant subscribes to nothing.
+`#[prop(into)]`-friendly. A constant subscribes to nothing, though it is not
+free: each read runs the closure and clones the handle, which for a `LiveQuery`
+or a cursor manager is an `Arc` bump.
 
 One thing does not survive: the timeline's loaded window. A `ScrollManager`
 takes its context at construction and ankurah-virtual-scroll 0.9.0 cannot

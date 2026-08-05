@@ -44,7 +44,7 @@ pub use read_state::DmReadStateManager;
 pub use sidebar::DmSidebar;
 pub use thread_view::DmConversation;
 
-use crate::context::{ChatContext, WriteSession};
+use crate::context::{ChatContext, Live, WriteSession};
 use crate::queries;
 
 /// The viewer's threads, live. Scoped by policy to threads the viewer is in —
@@ -149,9 +149,16 @@ pub fn partner_of(thread: &DmThreadView, viewer: EntityId) -> Option<EntityId> {
 /// the same correspondent concurrently would each keep talking into their own
 /// row — the messages would all be readable, but the conversation would look
 /// like it had forked.
-pub fn converge_selection(threads: LiveQuery<DmThreadView>, selected: RwSignal<Option<DmThreadView>>) {
+///
+/// Takes the thread set as a [`Live`] and reads it TRACKED, which is what
+/// keeps install-once true across a sign-in. The effect already has to track
+/// the query to fire at all; tracking the handle as well means a host that
+/// swaps its thread set gets convergence re-subscribed to the new one, instead
+/// of a race resolver still watching a session nobody is using. Reading it
+/// untracked would have left exactly that.
+pub fn converge_selection(threads: Live<LiveQuery<DmThreadView>>, selected: RwSignal<Option<DmThreadView>>) {
     Effect::new(move |_| {
-        let all = threads.get();
+        let all = threads.current().get();
         let Some(current) = selected.get() else { return };
         let (Ok(a), Ok(b)) = (current.a(), current.b()) else { return };
         let pair = canonical_pair(a.id(), b.id());

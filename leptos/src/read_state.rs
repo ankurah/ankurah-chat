@@ -27,7 +27,7 @@
 //! harmless: reads take the max across rows and edits converge on one row.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use ankurah::{changes::ChangeSet, EntityId, LiveQuery};
 use ankurah_signals::{Get, Mut, Peek, Subscribe, SubscriptionGuard};
@@ -74,6 +74,23 @@ struct Inner {
     _read_states_guard: Mutex<Option<SubscriptionGuard>>,
 }
 
+/// The manager's own handle on itself, for a callback that must not keep it
+/// alive.
+///
+/// WHY WEAK. `Inner` owns the subscription guards, and each guard owns the
+/// callback that fires it — so a callback holding a strong `Arc<Inner>` closes
+/// a cycle and the manager can never drop. That was harmless while a manager
+/// lived as long as the application. It is not harmless now that a host swaps
+/// one on sign-in: the replaced manager would stay alive with its
+/// subscriptions running, and the DM cursor-repair path would go on writing
+/// through the old session's context. A weak handle is the shape a host cannot
+/// forget to use, which is why it is here rather than in a disposal method
+/// somebody has to remember to call.
+///
+/// Upgrading fails exactly once — after the last `ReadStateManager` clone is
+/// gone — and the callback then has nothing to update.
+type WeakInner = Weak<Inner>;
+
 struct RoomWindow {
     room_id: EntityId,
     query: LiveQuery<MessageView>,
@@ -107,28 +124,30 @@ impl ReadStateManager {
         });
 
         // Own read-state rows → cursor map (and re-derive every badge).
-        let inner_for_rs = inner.clone();
+        let inner_for_rs: WeakInner = Arc::downgrade(&inner);
         let rs_guard = read_states.subscribe(move |_: ChangeSet<ReadStateView>| {
-            Self::rebuild_cursors(&inner_for_rs);
-            if !inner_for_rs.ready.peek() {
-                inner_for_rs.ready.set(true);
+            let Some(inner) = inner_for_rs.upgrade() else { return };
+            Self::rebuild_cursors(&inner);
+            if !inner.ready.peek() {
+                inner.ready.set(true);
             }
-            Self::recompute_all(&inner_for_rs);
+            Self::recompute_all(&inner);
         });
         *inner._read_states_guard.lock().unwrap() = Some(rs_guard);
 
         // One newest-messages window per room, following the rooms query.
-        let inner_for_rooms = inner.clone();
+        let inner_for_rooms: WeakInner = Arc::downgrade(&inner);
         let rooms_guard = rooms.subscribe(move |changeset: ChangeSet<RoomView>| {
+            let Some(inner) = inner_for_rooms.upgrade() else { return };
             for room in changeset.appeared() {
-                Self::add_window(&inner_for_rooms, room);
+                Self::add_window(&inner, room);
             }
             for room in changeset.removed() {
                 let key = room.id().to_base64();
-                inner_for_rooms.windows.lock().unwrap().remove(&key);
-                let mut unread = inner_for_rooms.unread.peek().clone();
+                inner.windows.lock().unwrap().remove(&key);
+                let mut unread = inner.unread.peek().clone();
                 if unread.remove(&key).is_some() {
-                    inner_for_rooms.unread.set(unread);
+                    inner.unread.set(unread);
                 }
             }
         });
@@ -209,10 +228,11 @@ impl ReadStateManager {
             }
         };
 
-        let inner_for_sub = inner.clone();
+        let inner_for_sub: WeakInner = Arc::downgrade(inner);
         let key_for_sub = key.clone();
         let guard = query.subscribe(move |_: ChangeSet<MessageView>| {
-            Self::recompute_room(&inner_for_sub, &key_for_sub);
+            let Some(inner) = inner_for_sub.upgrade() else { return };
+            Self::recompute_room(&inner, &key_for_sub);
         });
 
         inner.windows.lock().unwrap().insert(key.clone(), RoomWindow { room_id: room.id(), query, _guard: guard });
