@@ -4,9 +4,11 @@ members = ["model", "leptos"]
 
 # The pin family every crate in this workspace must resolve within — the
 # ankurah 0.9.0 arrangement, exactly as community's leptos-app and the
-# ankurah-xray crate pin it. The leptos entries are still unused (they arrive
-# with the components) and are declared anyway, so the constraint is
-# executable before the code that must satisfy it exists; see
+# ankurah-xray crate pin it. Today only `ankurah`, `wasm-bindgen` and
+# `getrandom` have a member claiming them; the rest (`ankurah-signals`,
+# `leptos`, `leptos_macro`, `web-sys`, `js-sys`, `wasm-bindgen-futures`)
+# arrive with the components and are declared now so the constraint is
+# executable before the code that must satisfy it exists. See
 # ~/ak/x-ray/Cargo.toml for the full reasoning on each ceiling.
 #
 # - leptos 0.8.15+ pulls server_fn → wasm-streams → js-sys ^0.3.85, but

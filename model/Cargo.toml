@@ -24,13 +24,26 @@ serde = { version = "1.0", features = ["derive"] }
 #     `#[wasm_bindgen]` attributes into this crate.
 #   - a randomness backend. Both getrandom lines arrive transitively through
 #     ankurah (entity ids) and both refuse wasm32-unknown-unknown until one is
-#     named: 0.3 wants the `wasm_js` FEATURE *and* the matching
-#     `getrandom_backend="wasm_js"` cfg (this workspace's .cargo/config.toml
-#     sets it; it raises a compile_error given one without the other), and 0.2
-#     — reached via ankurah's rand 0.8 — wants its own `js` feature.
+#     named. On 0.3, the `wasm_js` FEATURE named here is both necessary and
+#     sufficient — 0.3.4's backend selector reaches the wasm_js module from
+#     the feature alone. (The `getrandom_backend="wasm_js"` rustflag in this
+#     workspace's .cargo/config.toml is a separate, deliberate belt: the lock
+#     file is gitignored, so a fresh resolve can land on an early 0.3.x that
+#     wanted the cfg too, and setting it is inert once the feature is on.)
+#     0.2 — reached via ankurah's rand 0.8 — wants its own `js` feature.
 #
-# All of it is target-scoped so a native server build, which persists these
-# same collections, never pulls browser glue it has no use for.
+# All of it is target-scoped, which keeps the browser glue off this crate's
+# own native dependency edges. It is NOT a guarantee that a native build of
+# some consuming workspace never sees `ankurah/wasm`: cargo unifies features
+# per package per target across the whole graph, so a sibling crate enabling
+# it would enable it for ankurah here too. This table simply never asks.
+#
+# The two scopes in play are deliberately different predicates: this table
+# matches `cfg(target_arch = "wasm32")` — the conventional spelling for "a
+# wasm build" — while the rustflag is keyed to the `wasm32-unknown-unknown`
+# triple, because a browser randomness backend is right for that triple and
+# not for, say, a WASI one. wasm32-unknown-unknown is the only wasm target
+# this crate is exercised on today.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ankurah = { workspace = true, features = ["derive", "wasm"] }
 wasm-bindgen = { workspace = true }

@@ -11,16 +11,25 @@
 //! every consumer depends on is what guarantees that agreement.
 //!
 //! The caps below are part of that shared contract, not local tuning: change
-//! them for all consumers in lockstep, or not at all.
+//! them for all consumers in lockstep, or not at all. Being contract is not
+//! the same as being public API, though, and only [`MAX_MENTION_ID_LEN`] is
+//! exposed — a consumer's own positional token parser has to accept exactly
+//! the payloads this one does, so it reads the value instead of repeating the
+//! number. The other four are enforced here and nowhere else: a consumer that
+//! needed to read one would be doing scanning this module should be doing for
+//! it. Widen the boundary when such a consumer actually turns up, not before.
 
 /// Longest mention-id payload we accept. A real `EntityId` base64
 /// (URL_SAFE_NO_PAD over 16 bytes) is exactly 22 chars; the headroom tolerates
 /// future id-size changes without silently truncating, while still bounding
 /// pathological `<@aaaa…>` runs. Consumers validate the payload with
 /// `EntityId::from_base64` anyway — this is a scanner, not a validator.
-/// Public so a consumer's own positional token parser (e.g. a composer that
-/// shows `@DisplayName` and codes it back to a token at send time) can mirror
-/// the same bound; the scanner's semantics are unchanged.
+/// The one cap that is public, and re-exported at the crate root beside
+/// [`parse_mentions`]: a consumer's own positional token parser — a composer
+/// that shows `@DisplayName` and codes it back to a token at send time — has
+/// to accept exactly the payloads this scanner does, and reading the value is
+/// the only way to stay in step with it. Exposing it changes none of the
+/// scanner's semantics.
 pub const MAX_MENTION_ID_LEN: usize = 64;
 
 /// Longest URL we will extract. Anything longer is far more likely to be
@@ -58,10 +67,11 @@ const MAX_URLS: usize = 8;
 /// yields nothing. Duplicate mentions of the same id collapse to one entry so
 /// a message that shouts `<@X> <@X> <@X>` produces one notification, not three.
 ///
-/// Bounded: tokens must start within the first [`MAX_SCAN_BYTES`] of text, and
-/// at most [`MAX_MENTIONS`] distinct ids are returned (first-seen wins). Both
-/// bounds are part of the shared contract — the server fans out exactly the
-/// mentions the client highlights.
+/// Bounded: tokens must start within the first `MAX_SCAN_BYTES` (64 KiB) of
+/// text, and at most `MAX_MENTIONS` (20) distinct ids are returned (first-seen
+/// wins). Both bounds are part of the shared contract — the server fans out
+/// exactly the mentions the client highlights. Neither constant is public;
+/// see the module doc for why.
 pub fn parse_mentions(text: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     let scan_end = bytes.len().min(MAX_SCAN_BYTES);
@@ -116,9 +126,10 @@ fn is_base64url_byte(b: u8) -> bool { b.is_ascii_alphanumeric() || b == b'-' || 
 /// and any normalization here would have to be mirrored forever by every
 /// consumer.
 ///
-/// Bounded: URLs must start within the first [`MAX_SCAN_BYTES`] of text, and
-/// at most [`MAX_URLS`] distinct URLs are returned (first-seen wins) — one
-/// message can commission at most that much unfurl work.
+/// Bounded: URLs must start within the first `MAX_SCAN_BYTES` (64 KiB) of
+/// text, and at most `MAX_URLS` (8) distinct URLs are returned (first-seen
+/// wins) — one message can commission at most that much unfurl work. Neither
+/// constant is public; see the module doc for why.
 pub fn extract_urls(text: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     let scan_end = bytes.len().min(MAX_SCAN_BYTES);

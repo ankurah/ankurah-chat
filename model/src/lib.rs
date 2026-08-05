@@ -49,7 +49,7 @@ use ankurah::{EntityId, Model, Ref};
 use serde::{Deserialize, Serialize};
 
 pub mod text;
-pub use text::{extract_urls, parse_mentions};
+pub use text::{extract_urls, parse_mentions, MAX_MENTION_ID_LEN};
 
 #[derive(Model, Debug, Serialize, Deserialize)]
 pub struct User {
@@ -154,11 +154,9 @@ pub struct ReadState {
 //
 // WHY THE PARTICIPANT FIELDS ARE PLAIN `Ref<User>` AND NEVER `Option<Ref<User>>`
 // ============================================================================
-// The crate docs state a rule: a new field added to an EXISTING collection must
-// be `Option<T>`, because rows written before the field existed carry no such
-// property and only `Option<T>` reads an absent property as `None` instead of
-// `PropertyError::Missing` (see `Room.topic`, `Message.collaborative`). That
-// rule is about RETROFITS.
+// The crate docs' "Adding a field to a collection that already has rows"
+// section states the rule that makes fields like `Room.topic` and
+// `Message.collaborative` optional. That rule is about RETROFITS.
 //
 // It must not be applied here, and applying it would be an access-control
 // defect rather than a style choice. `Predicate::Or` evaluates its left operand
@@ -167,9 +165,9 @@ pub struct ReadState {
 // error, not `false`. So a `Dm*` row missing its `a` property is invisible to
 // BOTH participants — including the one named by `b` — on the live path AND the
 // fetch path, silently, with nothing delivered and no error surfaced. The
-// reference consumer pins that in ankurah/community's
-// `server/tests/or_scope_live_tests.rs`
-// (`a_row_missing_the_left_arm_is_invisible_even_to_the_right_arms_participant`).
+// reference consumer pins that with
+// `a_row_missing_the_left_arm_is_invisible_even_to_the_right_arms_participant`:
+// https://github.com/ankurah/community/blob/main/server/tests/or_scope_live_tests.rs
 //
 // Therefore: these collections are BORN with both participant fields, every
 // create path sets both, and no participant field may ever become optional or
@@ -180,8 +178,9 @@ pub struct ReadState {
 //
 // The fields are `LWW` because that is the only backend available for a `Ref`
 // — not because anything rewrites them. Nothing in this crate edits `a` or `b`
-// after creation, and ankurah/community's `server/tests/model_pin_tests.rs`
-// pins that its create paths always set both.
+// after creation, and the reference consumer pins that its create paths always
+// set both:
+// https://github.com/ankurah/community/blob/main/server/tests/model_pin_tests.rs
 
 /// Order a participant pair canonically: one unordered pair of users maps to
 /// exactly one `(a, b)` tuple, so one pair ⇒ one `DmThread` and a find-or-create
@@ -335,10 +334,10 @@ pub struct DmThread {
 /// and by a rate limiter alike. A consumer that skips the thread lookup and
 /// believes these two fields hands every member an unlimited notification
 /// channel to strangers, each notification deep-linking to a conversation the
-/// stranger cannot open. That is not hypothetical: it is what
-/// ankurah/community's
-/// `claimed_participants_on_a_dm_notify_the_thread_not_the_claim` exists to
-/// keep from coming back.
+/// stranger cannot open. That is not hypothetical: it is what the reference
+/// consumer's `claimed_participants_on_a_dm_notify_the_thread_not_the_claim`
+/// exists to keep from coming back —
+/// <https://github.com/ankurah/community/blob/main/server/src/workers/mod.rs>.
 #[derive(Model, Debug, Serialize, Deserialize)]
 pub struct DmMessage {
     /// The thread this message belongs to — the only field render paths filter

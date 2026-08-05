@@ -44,6 +44,41 @@ The workspace resolves inside the ankurah 0.9.0 pin family (wasm-bindgen
 0.8.12–0.8.14 with leptos_macro <0.8.15). The ceilings are requirements, not
 preferences — see the workspace `Cargo.toml` comments.
 
+## Consuming this crate from a wasm app
+
+Not on crates.io yet, so depend on a git rev — an exact one, never a branch:
+these structs are the format of live rows, so the tree you compile against is
+something to choose rather than follow.
+
+```toml
+ankurah-chat-model = { git = "https://github.com/ankurah/ankurah-chat", rev = "<full sha>" }
+```
+
+Then, on your side:
+
+- **Adopt the pin family above.** ankurah-signals 0.9.0 holds js-sys/web-sys at
+  =0.3.82, and leptos 0.8.15+ demands ^0.3.85 through server_fn → wasm-streams.
+  The two cannot both be satisfied; raise both ends together or neither.
+- **Name a getrandom backend.** ankurah reaches getrandom transitively for
+  entity ids, and it refuses `wasm32-unknown-unknown` until something names a
+  backend. This crate declares the `wasm_js` feature for 0.3 and `js` for 0.2
+  on wasm targets, which is what the resolved versions need — but a
+  `.cargo/config.toml` does **not** travel with a dependency, so the
+  `getrandom_backend="wasm_js"` rustflag this repo sets for its own wasm checks
+  is not something you inherit. If your resolve lands on an early 0.3.x that
+  wants the cfg, set it in your own workspace:
+
+  ```toml
+  # <your workspace>/.cargo/config.toml
+  [target.wasm32-unknown-unknown]
+  rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
+  ```
+
+  (community does exactly this, in `leptos-app/.cargo/config.toml`.)
+- **Do not pass a `wasm` feature** — there isn't one. `ankurah/wasm` is enabled
+  by target, because no wasm build would want it off and forgetting it produces
+  a confusing failure deep inside ankurah-core.
+
 ## Status & trajectory
 
 The model has landed and community.ankurah.org consumes it — the collections
