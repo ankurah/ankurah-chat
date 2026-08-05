@@ -7,7 +7,7 @@ use ankurah_chat_model::{MessageView, ReactionView, UserView};
 use ankurah_signals::Get as AnkurahGet;
 use send_wrapper::SendWrapper;
 
-use crate::context::chat;
+use crate::context::{chat, Live};
 use crate::message_row::MessageRow;
 use crate::query_registry::{self, QueryRegistration};
 use crate::reactions::{picker_index, ReactionChip};
@@ -22,9 +22,12 @@ struct RowCtx {
     last_in_group: bool,
     /// Day-separator label rendered above this row when the calendar day changes.
     day_label: Option<String>,
+    /// Who the reader was when this row was built. Part of the `For` key,
+    /// because whether a message is the reader's own decides the row's shape.
+    viewer: Option<String>,
 }
 
-fn group_rows(msgs: &[MessageView]) -> Vec<RowCtx> {
+fn group_rows(msgs: &[MessageView], viewer: Option<String>) -> Vec<RowCtx> {
     let keys: Vec<(String, i64)> = msgs
         .iter()
         .map(|m| (m.user().map(|r| r.id().to_base64()).unwrap_or_default(), m.timestamp().unwrap_or(0)))
@@ -37,6 +40,7 @@ fn group_rows(msgs: &[MessageView]) -> Vec<RowCtx> {
             first_in_group: flags.first_in_group,
             last_in_group: flags.last_in_group,
             day_label: flags.day_label,
+            viewer: viewer.clone(),
         })
         .collect()
 }
@@ -45,13 +49,23 @@ fn group_rows(msgs: &[MessageView]) -> Vec<RowCtx> {
 #[component]
 pub fn MessageList(
     #[prop(into)] messages: Signal<Vec<MessageView>>,
-    users: LiveQuery<UserView>,
-    current_user_id: Option<String>,
+    #[prop(into)] users: Live<LiveQuery<UserView>>,
     editing_message: RwSignal<Option<MessageView>>,
     /// The composer's reply state, armed from the rows' context menus.
     replying_to: RwSignal<Option<MessageView>>,
 ) -> impl IntoView {
-    let rows = Signal::derive(move || group_rows(&messages.get()));
+    let chat = chat();
+    // Who the reader is comes from the session, not from a prop. A host's own
+    // `User` row resolves asynchronously, and a timeline that waited for it
+    // rendered the reader's own messages as somebody else's — no avatar
+    // gutter, no Edit, no Delete — until it arrived. The session knows from the
+    // first frame, and reading it TRACKED means a sign-in mid-visit re-keys the
+    // rows rather than leaving them wrong.
+    let viewer = {
+        let chat = chat.clone();
+        Signal::derive(move || chat.viewer().map(|id| id.to_base64()))
+    };
+    let rows = Signal::derive(move || group_rows(&messages.get(), viewer.get()));
 
     // Mention rendering: one id → display-name map shared by every row,
     // rebuilt when the users list (or any display name — View field reads are
@@ -61,6 +75,7 @@ pub fn MessageList(
         let users = users.clone();
         move |_| {
             users
+                .current()
                 .get()
                 .iter()
                 .filter_map(|u| {
@@ -82,7 +97,6 @@ pub fn MessageList(
     // query rebuilt against the new context without this list remounting. The
     // registration guard rides in the same signal: dropping it is what tells
     // an attached observer the old query is gone.
-    let chat = chat();
     let reactions_registration = StoredValue::new(None::<QueryRegistration>);
     let build = {
         let chat = chat.clone();
@@ -101,24 +115,29 @@ pub fn MessageList(
         }
     };
     // Built synchronously so the FIRST frame already has the query — chips
-    // that arrive a frame late are a visible pop — and again on a session
-    // swap. The effect's first run is that same initial pass, so it skips.
+    // that arrive a frame late are a visible pop — and again whenever the
+    // session moves.
+    //
+    // The effect compares generations rather than skipping its first run. A
+    // first-run skip is wrong: the effect runs deferred, so if the host swapped
+    // the session between this build and that run, the skip would swallow the
+    // swap and leave the query pointed at a context nobody is using any more.
     let reactions = RwSignal::new(build());
-    let is_first_run = StoredValue::new(true);
+    let built_for = StoredValue::new(chat.generation_untracked());
     Effect::new({
         let chat = chat.clone();
         let build = build.clone();
         move |_| {
-            let _ = chat.context(); // tracked: this is what a session swap moves
-            if is_first_run.get_value() {
-                is_first_run.set_value(false);
+            let generation = chat.generation(); // tracked: the swap signal
+            if generation == built_for.get_value() {
                 return;
             }
+            built_for.set_value(generation);
             reactions.set(build());
         }
     });
-    let viewer_id = current_user_id.clone();
     let reaction_chips = Memo::new(move |_| {
+        let viewer_id = viewer.get();
         // Distinct users per (message, emoji): duplicate rows (possible under
         // concurrent first-toggles) count once.
         let mut sets: HashMap<String, HashMap<String, HashSet<String>>> = HashMap::new();
@@ -177,23 +196,25 @@ pub fn MessageList(
                 key=|row: &RowCtx| {
                     // Grouping context is part of the key so a row re-renders when
                     // a neighbor changes its group shape (e.g. a follow-up arrives).
+                    // So is the reader: whose message a row is decides its shape.
                     format!(
-                        "{}|{}{}{}",
+                        "{}|{}{}{}|{}",
                         row.message.id().to_base64(),
                         row.first_in_group as u8,
                         row.last_in_group as u8,
-                        row.day_label.is_some() as u8
+                        row.day_label.is_some() as u8,
+                        row.viewer.as_deref().unwrap_or("")
                     )
                 }
                 children={
                     let users = users.clone();
-                    let current_user_id = current_user_id.clone();
                     move |row: RowCtx| {
+                        let viewer = row.viewer.clone();
                         view! {
                             <MessageRow
                                 message=row.message
                                 users=users.clone()
-                                current_user_id=current_user_id.clone()
+                                current_user_id=viewer
                                 editing_message=editing_message
                                 replying_to=replying_to
                                 first_in_group=row.first_in_group

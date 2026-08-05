@@ -94,13 +94,31 @@ zero (its defaults use `:where`), so your value wins.
 ### Signing in mid-visit
 
 `ChatContext::set_session(context, viewer)` swaps the session under mounted
-components. Nothing unmounts, so the draft, the armed reply, the selected room
-and the open conversation all stay. The timeline's loaded window does not: a
-`ScrollManager` takes its context at construction and ankurah-virtual-scroll
-0.9.0 cannot re-point one, so the pane rebuilds and the reader lands at the live
-tail. Rebuild anything you own on your side too — the LiveQueries you passed in
-(rooms, users, DM threads) and the two read-cursor managers, which are
-constructed with the reader's id.
+components. Nothing unmounts, so the draft, the armed reply, the selected room,
+the open conversation and the message being edited all stay exactly as they
+were.
+
+Everything you handed in is scoped to a session too — the rooms list, the
+members list, the DM thread set, the two read-cursor managers — so all of it has
+to be rebuilt against the new context. Those props take a `Live`, so you swap
+what your signal holds and the components re-point in place:
+
+```rust
+let members = RwSignal::new(context.query::<UserView>("true")?);
+view! { <RoomLog room=selected users=Live::reactive(move || members.get()) … /> }
+
+// on sign-in
+chat.set_session(new_context, Some(user_id));
+members.set(new_context.query::<UserView>("true")?);
+```
+
+A host with nothing to swap passes the value directly — `Live` is
+`#[prop(into)]`-friendly and a constant subscribes to nothing.
+
+One thing does not survive: the timeline's loaded window. A `ScrollManager`
+takes its context at construction and ankurah-virtual-scroll 0.9.0 cannot
+re-point one, so the pane rebuilds and the reader lands at the live tail rather
+than wherever they had paged back to.
 
 Then, on your side:
 

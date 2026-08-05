@@ -8,7 +8,7 @@ use ankurah_signals::Get as AnkurahGet;
 
 use std::collections::HashMap;
 
-use crate::context::chat;
+use crate::context::{chat, Live};
 use crate::fmt;
 use crate::message_context_menu::MessageContextMenu;
 use crate::reactions::{ReactionBar, ReactionChip};
@@ -24,7 +24,13 @@ use crate::reactions::{ReactionBar, ReactionChip};
 #[component]
 pub fn MessageRow(
     message: MessageView,
-    users: LiveQuery<UserView>,
+    #[prop(into)]
+    users: Live<LiveQuery<UserView>>,
+    /// The reader's own id, as the list resolved it from the session. Passed
+    /// down rather than read again so every row in one render agrees, and so
+    /// the list's `For` key can carry it — a reader who signs in mid-visit
+    /// changes which rows are theirs, and that changes each row's SHAPE (the
+    /// avatar gutter, the meta line), not just its classes.
     current_user_id: Option<String>,
     editing_message: RwSignal<Option<MessageView>>,
     /// The composer's reply state, armed by this row's context menu.
@@ -55,7 +61,7 @@ pub fn MessageRow(
 
     // Find the author from the users list (reactive: display names can change).
     let author = move || {
-        let user_list = users.get();
+        let user_list = users.current().get();
         let message_user = message_for_author.user().map(|r| r.id().to_base64()).unwrap_or_default();
         user_list.iter().find(|u| u.id().to_base64() == message_user).cloned()
     };
@@ -483,9 +489,9 @@ pub fn MessageRow(
 }
 
 /// Embedded preview of the replied-to message: author + one-line
-/// snippet inside the reply's bubble. The ref resolves once via `ctx().get`
-/// (local-first, then the peer — the TombstoneNotice per-row idiom: cost
-/// confined to rows that actually carry `re`); the resolved view is live
+/// snippet inside the reply's bubble. The ref resolves once through the
+/// session's context (local-first, then the peer), and only for rows that
+/// actually carry `re`; the resolved view is live
 /// afterwards, so an edit or delete of the original re-renders the preview
 /// (tombstones render "Removed message"). Clicking jumps to the original
 /// when it is rendered in the current timeline; a target outside the loaded

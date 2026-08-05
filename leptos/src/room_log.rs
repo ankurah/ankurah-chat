@@ -4,6 +4,7 @@ use ankurah::LiveQuery;
 use ankurah_chat_model::{MessageView, RoomView, UserView};
 
 use crate::composer::{Composer, ComposerTarget};
+use crate::context::Live;
 use crate::debug_header::TimelineDebugHeader;
 use crate::message_list::MessageList;
 use crate::read_state::ReadStateManager;
@@ -22,13 +23,18 @@ use crate::scroll_pane::ScrollPane;
 #[component]
 pub fn RoomLog(
     room: RwSignal<Option<RoomView>>,
-    current_user: RwSignal<Option<UserView>>,
-    /// The users query, for author names and mention rendering. Owned by the
+    /// The members query, for author names and mention rendering. Owned by the
     /// host rather than created here: this component remounts whenever the
-    /// reader switches rooms or moves to a DM thread, and a per-mount
+    /// reader switches rooms or moves to a conversation, and a per-mount
     /// LiveQuery would mean a per-mount registration nothing ever releases.
-    users: LiveQuery<UserView>,
-    read_state: ReadStateManager,
+    /// [`Live`] so a host can swap it for one built against a new session
+    /// without remounting this.
+    #[prop(into)]
+    users: Live<LiveQuery<UserView>>,
+    /// The reader's room cursors. `Live` for the same reason: they are scoped
+    /// to one reader, so signing in means a new manager.
+    #[prop(into)]
+    read_state: Live<ReadStateManager>,
     /// Whether to offer the timeline's diagnostic header — scroll mode,
     /// pagination flags, item count — behind a small toggle. Off by default:
     /// an embedded panel has no use for it.
@@ -80,7 +86,7 @@ pub fn RoomLog(
         let read_state = read_state.clone();
         move || {
             if let (Some(r), Some(ts)) = (room.get_untracked(), newest_timestamp(&messages.get_untracked())) {
-                read_state.mark_read(&r.id().to_base64(), ts);
+                read_state.current_untracked().mark_read(&r.id().to_base64(), ts);
             }
         }
     };
@@ -123,7 +129,6 @@ pub fn RoomLog(
                 let mark_read_at_tail = mark_read_at_tail.clone();
                 move || {
                     let current_room = room.get()?;
-                    let current_user_id = current_user.get().map(|u| u.id().to_base64());
                     let users = users.clone();
 
                     let handle_scroll = pane.scroll_handler(mark_read_at_tail.clone());
@@ -162,7 +167,6 @@ pub fn RoomLog(
                                     <MessageList
                                         messages=messages
                                         users=users.clone()
-                                        current_user_id=current_user_id.clone()
                                         editing_message=editing_message
                                         replying_to=replying_to
                                     />

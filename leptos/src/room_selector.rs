@@ -18,16 +18,19 @@ use ankurah::LiveQuery;
 use ankurah_chat_model::{Room, RoomView};
 use ankurah_signals::Get as AnkurahGet;
 
-use crate::context::chat;
+use crate::context::{chat, Live};
 use crate::read_state::ReadStateManager;
 
 #[component]
 pub fn RoomSelector(
-    rooms: LiveQuery<RoomView>,
+    /// Which rooms to offer — the host's choice, and [`Live`] so it can be
+    /// swapped for one built against a new session without remounting.
+    #[prop(into)]
+    rooms: Live<LiveQuery<RoomView>>,
     selected_room: RwSignal<Option<RoomView>>,
     /// Unread badges. Omit for a selector that shows none.
-    #[prop(optional)]
-    read_state: Option<ReadStateManager>,
+    #[prop(optional, into)]
+    read_state: Option<Live<ReadStateManager>>,
     /// Whether the rooms surface is the one the reader is looking at. A host
     /// that also mounts a DM panel passes "no conversation is open" here, so
     /// only one rail row can look selected at a time — a sidebar must not
@@ -68,7 +71,7 @@ pub fn RoomSelector(
                 <NewRoomInput selected_room=selected_room on_cancel=move || is_creating.set(false) />
             </Show>
 
-            <Show when=move || rooms_for_empty.get().is_empty()>
+            <Show when=move || rooms_for_empty.current().get().is_empty()>
                 <div class="emptyRooms">"No rooms yet — press + to plant one."</div>
             </Show>
 
@@ -79,15 +82,15 @@ pub fn RoomSelector(
 
 #[component]
 fn RoomListUl(
-    #[prop(into)] rooms: LiveQuery<RoomView>,
+    #[prop(into)] rooms: Live<LiveQuery<RoomView>>,
     selected_room: RwSignal<Option<RoomView>>,
-    read_state: Option<ReadStateManager>,
+    read_state: Option<Live<ReadStateManager>>,
     active: Option<Signal<bool>>,
     on_select: Option<Callback<RoomView>>,
 ) -> impl IntoView {
     view! {
         <For
-            each=move || rooms.get()
+            each=move || rooms.current().get()
             key=|room: &RoomView| room.id()
             children={
                 let read_state = read_state.clone();
@@ -111,7 +114,7 @@ fn RoomListUl(
 fn RoomItem(
     room: RoomView,
     selected_room: RwSignal<Option<RoomView>>,
-    read_state: Option<ReadStateManager>,
+    read_state: Option<Live<ReadStateManager>>,
     active: Option<Signal<bool>>,
     on_select: Option<Callback<RoomView>>,
 ) -> impl IntoView {
@@ -146,7 +149,7 @@ fn RoomItem(
                     // Reactive read: re-renders as messages arrive, or as the
                     // reader's persistent cursor advances on any of their
                     // devices.
-                    let unread_count = read_state.as_ref().map(|rs| rs.unread_count(&room_id_badge)).unwrap_or(0);
+                    let unread_count = read_state.as_ref().map(|rs| rs.current().unread_count(&room_id_badge)).unwrap_or(0);
                     (unread_count > 0).then(|| {
                         let badge_text = if unread_count >= 10 { "10+".to_string() } else { unread_count.to_string() };
                         view! { <span class="unreadBadge">{badge_text}</span> }

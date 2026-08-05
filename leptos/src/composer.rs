@@ -3,7 +3,6 @@ use leptos::prelude::*;
 use std::collections::HashMap;
 use web_sys::KeyboardEvent;
 
-use ankurah::LiveQuery;
 use ankurah_chat_model::mention_display::MemberDirectory;
 use ankurah_chat_model::{DmThreadView, Message, MessageView, RoomView, UserView};
 use ankurah_signals::{Get as AnkurahGet, Peek as AnkurahPeek};
@@ -271,19 +270,20 @@ pub fn Composer(
         }
     };
     // Built synchronously so the first keystroke can already complete a
-    // mention, and again on a session swap. The effect's first run is that
-    // same initial pass, so it skips.
+    // mention, and again whenever the session moves. Generations rather than a
+    // first-run skip, for the reason message_list.rs sets out: the effect runs
+    // deferred, and a skip would swallow a swap that happened in between.
     let mention_users = RwSignal::new(build_users());
-    let users_first_run = StoredValue::new(true);
+    let users_built_for = StoredValue::new(chat.generation_untracked());
     Effect::new({
         let chat = chat.clone();
         let build_users = build_users.clone();
         move |_| {
-            let _ = chat.context(); // tracked: this is what a session swap moves
-            if users_first_run.get_value() {
-                users_first_run.set_value(false);
+            let generation = chat.generation(); // tracked: the swap signal
+            if generation == users_built_for.get_value() {
                 return;
             }
+            users_built_for.set_value(generation);
             mention_users.set(build_users());
         }
     });
@@ -545,6 +545,18 @@ pub fn Composer(
                     let dir = MemberDirectory::new(members.iter().cloned());
                     (dir.decode(&edit_msg.text().unwrap_or_default()), members)
                 });
+                // The armed edit may predate a session swap: a reader who
+                // signed in as somebody else must not save through the new
+                // session into the old reader's message. Community never swaps
+                // a session, so this is the crate's contract holding rather
+                // than a case that arises there.
+                let author = edit_msg.user().ok().map(|r| r.id());
+                let open_to_anyone = edit_msg.collaborative().ok().flatten().unwrap_or(false);
+                if !open_to_anyone && author != Some(session.viewer) {
+                    tracing::warn!("abandoning an edit armed by a different reader");
+                    editing_message.set(None);
+                    return;
+                }
                 let picks = mention_picks.get_value();
                 wasm_bindgen_futures::spawn_local(async move {
                     let result = async {

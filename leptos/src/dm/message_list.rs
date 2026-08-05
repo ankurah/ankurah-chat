@@ -26,17 +26,22 @@ use ankurah::{LiveQuery, View as _};
 use ankurah_chat_model::{DmMessageView, UserView};
 use ankurah_signals::Get as AnkurahGet;
 
+use crate::context::{chat, Live};
 use crate::fmt;
 
 /// The thread's messages, grouped by author and day.
 #[component]
 pub fn DmMessageList(
     #[prop(into)] messages: Signal<Vec<DmMessageView>>,
-    users: LiveQuery<UserView>,
-    current_user_id: Option<String>,
-    /// Who the viewer is talking to — for the empty state.
+    #[prop(into)] users: Live<LiveQuery<UserView>>,
+    /// Who the reader is talking to — for the empty state.
     #[prop(into)] partner_name: Signal<String>,
 ) -> impl IntoView {
+    // Identity from the session, for the reason the room list gives: a host's
+    // own `User` row resolves asynchronously, and a thread that waited for it
+    // rendered the reader's own messages as their correspondent's.
+    let chat = chat();
+    let viewer = Signal::derive(move || chat.viewer().map(|id| id.to_base64()));
     // Mention rendering: one id → display-name map shared by every row,
     // rebuilt when any display name changes. DM text carries the same `<@id>`
     // tokens room text does and renders them the same way. Whether a server
@@ -46,6 +51,7 @@ pub fn DmMessageList(
         let users = users.clone();
         move |_| {
             users
+                .current()
                 .get()
                 .iter()
                 .filter_map(|u| {
@@ -57,12 +63,17 @@ pub fn DmMessageList(
     });
 
     let rows = Signal::derive(move || {
+        let viewer = viewer.get();
         let msgs = messages.get();
         let keys: Vec<(String, i64)> = msgs
             .iter()
             .map(|m| (m.user().map(|r| r.id().to_base64()).unwrap_or_default(), m.timestamp().unwrap_or(0)))
             .collect();
-        crate::grouping::group_flags(&keys).into_iter().zip(msgs).collect::<Vec<_>>()
+        crate::grouping::group_flags(&keys)
+            .into_iter()
+            .zip(msgs)
+            .map(|(flags, message)| (flags, message, viewer.clone()))
+            .collect::<Vec<_>>()
     });
 
     view! {
@@ -87,26 +98,27 @@ pub fn DmMessageList(
         >
             <For
                 each=move || rows.get()
-                key=|(flags, message): &(crate::grouping::GroupFlags, DmMessageView)| {
+                key=|(flags, message, viewer): &(crate::grouping::GroupFlags, DmMessageView, Option<String>)| {
                     // Grouping context is part of the key so a row re-renders
-                    // when a neighbour changes its group shape.
+                    // when a neighbour changes its group shape — and so is the
+                    // reader, since whose message a row is decides its shape.
                     format!(
-                        "{}|{}{}{}",
+                        "{}|{}{}{}|{}",
                         message.id().to_base64(),
                         flags.first_in_group as u8,
                         flags.last_in_group as u8,
-                        flags.day_label.is_some() as u8
+                        flags.day_label.is_some() as u8,
+                        viewer.as_deref().unwrap_or("")
                     )
                 }
                 children={
                     let users = users.clone();
-                    let current_user_id = current_user_id.clone();
-                    move |(flags, message)| {
+                    move |(flags, message, viewer)| {
                         view! {
                             <DmMessageRow
                                 message=message
                                 users=users.clone()
-                                current_user_id=current_user_id.clone()
+                                current_user_id=viewer
                                 first_in_group=flags.first_in_group
                                 day_label=flags.day_label
                                 last_in_group=flags.last_in_group
@@ -123,7 +135,7 @@ pub fn DmMessageList(
 #[component]
 fn DmMessageRow(
     message: DmMessageView,
-    users: LiveQuery<UserView>,
+    #[prop(into)] users: Live<LiveQuery<UserView>>,
     current_user_id: Option<String>,
     first_in_group: bool,
     last_in_group: bool,
@@ -138,6 +150,7 @@ fn DmMessageRow(
         let author_user_id = author_user_id.clone();
         move || {
             users
+                .current()
                 .get()
                 .iter()
                 .find(|u| u.id().to_base64() == author_user_id)

@@ -27,15 +27,15 @@ use ankurah_signals::Get as AnkurahGet;
 use ankurah_chat_model::{DmThreadView, UserView};
 
 use super::read_state::DmReadStateManager;
-use crate::context::chat;
+use crate::context::{chat, Live};
 use crate::{dm, fmt};
 
 #[component]
 pub fn DmSidebar(
-    threads: LiveQuery<DmThreadView>,
-    users: LiveQuery<UserView>,
+    #[prop(into)] threads: Live<LiveQuery<DmThreadView>>,
+    #[prop(into)] users: Live<LiveQuery<UserView>>,
     selected_dm: RwSignal<Option<DmThreadView>>,
-    read_state: DmReadStateManager,
+    #[prop(into)] read_state: Live<DmReadStateManager>,
 ) -> impl IntoView {
     // Nobody signed in means no conversations of one's own. The section still
     // renders — a host that laid out a rail gets its heading and an empty
@@ -60,7 +60,8 @@ pub fn DmSidebar(
         let threads = threads.clone();
         let read_state = read_state.clone();
         Signal::derive(move || {
-            let mut rows: Vec<(dm::Conversation, i64)> = dm::conversations(&threads.get())
+            let read_state = read_state.current();
+            let mut rows: Vec<(dm::Conversation, i64)> = dm::conversations(&threads.current().get())
                 .into_iter()
                 .map(|conversation| {
                     let newest = conversation.rows.iter().map(|id| read_state.newest_ts(&id.to_base64())).max().unwrap_or(0);
@@ -125,9 +126,9 @@ fn DmListItem(
     /// Every thread row this conversation is spread across (see
     /// `dm::Conversation`) — what the unread badge counts over.
     rows: Vec<ankurah::EntityId>,
-    users: LiveQuery<UserView>,
+    #[prop(into)] users: Live<LiveQuery<UserView>>,
     selected_dm: RwSignal<Option<DmThreadView>>,
-    read_state: DmReadStateManager,
+    #[prop(into)] read_state: Live<DmReadStateManager>,
     /// The reader, when there is one. Without one there is no "other
     /// participant" to name — and signing in mid-visit has to fill the name
     /// in, so this tracks rather than being read once.
@@ -142,6 +143,7 @@ fn DmListItem(
         let users = users.clone();
         move || match partner.get() {
             Some(p) => {
+                let users = users.current();
                 let _ = users.get();
                 dm::display_name(&users, p)
             }
@@ -171,6 +173,7 @@ fn DmListItem(
             {move || {
                 // Across the pair's rows, for the same reason the sidebar's
                 // activity is: unread messages can be sitting in a race twin.
+                let read_state = read_state.current();
                 let unread_count: usize = row_keys.iter().map(|key| read_state.unread_count(key)).sum();
                 (unread_count > 0).then(|| {
                     let badge_text = if unread_count >= 10 { "10+".to_string() } else { unread_count.to_string() };

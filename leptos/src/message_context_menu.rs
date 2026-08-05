@@ -220,8 +220,19 @@ pub fn MessageContextMenu(
         let chat = chat.clone();
         move |_: LeptosMouseEvent| {
             // A write like any other: it needs an author and a context, taken
-            // together and before the future below defers.
+            // together and before the future below defers — and the reader it
+            // resolves must still be the author, because only an author opens
+            // their own message up. The menu was built for whoever was signed
+            // in when it opened; a session swapped underneath it must not carry
+            // that decision over. Community never swaps a session, so this is
+            // the crate's contract holding rather than a case that arises
+            // there.
             let Some(session) = chat.write_session() else { return };
+            if message.user().ok().map(|r| r.id()) != Some(session.viewer) {
+                tracing::warn!("refusing to change who may edit a message the reader did not write");
+                on_close();
+                return;
+            }
             let message = message.clone();
             let on_close = on_close.clone();
             let make_collaborative = !is_collaborative;
@@ -275,7 +286,16 @@ pub fn MessageContextMenu(
             return;
         }
 
+        // `is_own` was decided when the menu opened. Re-check it against the
+        // reader the session names NOW, so a swap between the two cannot turn
+        // an author's delete into somebody else's. Community never swaps a
+        // session; this is the crate's contract holding.
         let Some(session) = chat.write_session() else { return };
+        if message.user().ok().map(|r| r.id()) != Some(session.viewer) {
+            tracing::warn!("refusing an author delete for a message the reader did not write");
+            on_close();
+            return;
+        }
         wasm_bindgen_futures::spawn_local(async move {
             match (|| async {
                 let trx = session.context.begin();

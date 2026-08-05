@@ -26,6 +26,18 @@
 //! were, and the components rebuild their queries against the new context
 //! where they stand.
 //!
+//! The host has work to do too, and it is work it can do IN PLACE. Everything
+//! it hands the components — the rooms list, the members list, the DM thread
+//! set, the two read-cursor managers — is scoped to a session, so all of it
+//! has to be rebuilt against the new context. That is why those props are
+//! [`Live`] rather than plain values: the host swaps what its signal holds,
+//! and the components re-point where they stand. Handing them as plain values
+//! and rebuilding by remounting would forfeit the very state this promises to
+//! keep.
+//!
+//! A host with nothing to swap passes the value directly and pays nothing —
+//! `Live` is `#[prop(into)]`-friendly and a constant tracks nothing.
+//!
 //! WHAT DOES NOT SURVIVE, stated plainly: the timeline's loaded window. A
 //! `ScrollManager` takes its context as a constructor argument and
 //! ankurah-virtual-scroll 0.9.0 offers no way to re-point one, so the pane
@@ -34,13 +46,6 @@
 //! through history loses their place in it. Closing that needs the scroller to
 //! accept a new context, or an anchor-restoring jump API to page back to where
 //! they were.
-//!
-//! Two more things a host owns rather than inherits:
-//!
-//! - read-cursor managers, which are constructed with the reader's id to scope
-//!   their rows, so a host that upgrades a session builds new ones;
-//! - any LiveQuery the host built and passed in (the rooms list, the users
-//!   list, the DM thread set) — those are the host's, and it rebuilds them.
 //!
 //! # Reaching the handshake
 //!
@@ -130,6 +135,48 @@ pub struct ChatHooks {
     pub menu_actions: Option<MenuActions>,
 }
 
+/// Something the host owns, hands in, and may swap in place.
+///
+/// What it is for: letting a reader sign in without losing what they were
+/// doing. Every LiveQuery and every read-cursor manager a host passes these
+/// components is scoped to one session — new context, new queries — and a
+/// plain value handed over at mount can only be replaced by remounting, which
+/// takes the draft, the armed reply and the open conversation with it. A
+/// `Live` is read reactively, so the host swaps what its signal holds and the
+/// components re-point in place.
+///
+/// A host with nothing to swap just passes the value: `From` makes it a
+/// constant, and a constant subscribes to nothing.
+pub struct Live<T: Clone + 'static>(ArcSignal<SendWrapper<T>>);
+
+impl<T: Clone + 'static> Clone for Live<T> {
+    fn clone(&self) -> Self { Self(self.0.clone()) }
+}
+
+impl<T: Clone + 'static> Live<T> {
+    /// A value that never changes.
+    pub fn constant(value: T) -> Self {
+        let held = SendWrapper::new(value);
+        Self(ArcSignal::derive(move || held.clone()))
+    }
+
+    /// A value the host may swap. The closure is read reactively, so a
+    /// component that uses this re-points when it changes.
+    pub fn reactive(read: impl Fn() -> T + Send + Sync + 'static) -> Self {
+        Self(ArcSignal::derive(move || SendWrapper::new(read())))
+    }
+
+    /// What the host is holding right now, tracked.
+    pub fn current(&self) -> T { self.0.get().take() }
+
+    /// What the host is holding right now, without subscribing.
+    pub fn current_untracked(&self) -> T { self.0.get_untracked().take() }
+}
+
+impl<T: Clone + 'static> From<T> for Live<T> {
+    fn from(value: T) -> Self { Self::constant(value) }
+}
+
 /// Who is writing, and what through — resolved together, at one instant.
 ///
 /// Two things are true of every write in these components: it needs an author,
@@ -157,6 +204,10 @@ pub struct ChatContext(SendWrapper<Arc<Inner>>);
 
 struct Inner {
     session: ArcRwSignal<SendWrapper<Session>>,
+    /// Bumped by every [`ChatContext::set_session`]. `ankurah::Context` has no
+    /// equality, so this is how a component that built something against a
+    /// session recognises that it is looking at a different one.
+    generation: ArcRwSignal<u64>,
     online: Box<dyn Fn() -> bool>,
     can_moderate: Box<dyn Fn() -> bool>,
     demand_auth: Option<Box<dyn Fn()>>,
@@ -188,7 +239,19 @@ impl ChatContext {
     /// both — the sign-in path. Queries re-point in place; nothing unmounts.
     pub fn set_session(&self, context: Context, viewer: Option<EntityId>) {
         self.0.session.set(SendWrapper::new(Session { context, viewer }));
+        self.0.generation.update(|n| *n += 1);
     }
+
+    /// Which session this is, counting from zero. Tracked.
+    ///
+    /// For components that build something against a session and must know
+    /// when to rebuild it: `ankurah::Context` carries no equality, so "is this
+    /// the one I built against" is answered by comparing this instead. Reading
+    /// it is also how such a component subscribes to the swap.
+    pub fn generation(&self) -> u64 { self.0.generation.get() }
+
+    /// Which session this is, without subscribing.
+    pub fn generation_untracked(&self) -> u64 { self.0.generation.get_untracked() }
 
     /// The ankurah context to read and write through. Reading this in an
     /// `Effect` or a `Memo` is what makes a query re-point when the host
@@ -284,6 +347,7 @@ impl ChatContextBuilder {
     pub fn build(self) -> ChatContext {
         ChatContext(SendWrapper::new(Arc::new(Inner {
             session: ArcRwSignal::new(SendWrapper::new(self.session)),
+            generation: ArcRwSignal::new(0),
             online: self.online.unwrap_or_else(|| Box::new(|| true)),
             can_moderate: self.can_moderate.unwrap_or_else(|| Box::new(|| false)),
             demand_auth: self.demand_auth,
