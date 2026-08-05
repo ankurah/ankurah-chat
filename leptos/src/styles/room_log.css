@@ -1,0 +1,240 @@
+/* Chat surface: message canvas, empty states, jump-to-latest, debug chrome. */
+
+.ankurah-chat .chatContainer, .ankurah-chat.chatContainer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--akchat-bg);
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  position: relative;
+}
+
+.ankurah-chat .chatContainer .debugHeader, .ankurah-chat.chatContainer .debugHeader {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 15;
+  opacity: 0.9;
+  pointer-events: auto;
+}
+
+.ankurah-chat .debugToggle, .ankurah-chat.debugToggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background-color: transparent;
+  border: none;
+  border-radius: var(--akchat-r-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--akchat-text-3);
+  opacity: 0.25;
+  transition:
+    opacity var(--akchat-t-fast) var(--akchat-ease),
+    background-color var(--akchat-t-fast) var(--akchat-ease);
+  z-index: 20;
+}
+
+.ankurah-chat .debugToggle:hover, .ankurah-chat.debugToggle:hover {
+  opacity: 1;
+  background-color: var(--akchat-surface-3);
+}
+
+.ankurah-chat .queryHeader, .ankurah-chat.queryHeader {
+  flex-shrink: 0;
+  padding: var(--akchat-sp-2) var(--akchat-sp-4);
+  background-color: var(--akchat-surface-2);
+  border-bottom: 1px solid var(--akchat-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--akchat-sp-2);
+  font-size: 12px;
+  color: var(--akchat-text-3);
+  overflow: hidden;
+  min-width: 0;
+  width: 100%;
+}
+
+.ankurah-chat .querySelection, .ankurah-chat.querySelection {
+  font-family: var(--akchat-font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.ankurah-chat .queryStatus, .ankurah-chat.queryStatus {
+  font-size: 14px;
+  font-weight: bold;
+  flex-shrink: 0;
+  margin-left: var(--akchat-sp-2);
+}
+
+.ankurah-chat .queryStatus.loaded, .ankurah-chat.queryStatus.loaded {
+  color: var(--akchat-ok);
+}
+
+.ankurah-chat .queryStatus.loading, .ankurah-chat.queryStatus.loading {
+  color: var(--akchat-unread-bg);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Empty states -------------------------------------------------------------- */
+
+.ankurah-chat .emptyState, .ankurah-chat.emptyState {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: var(--akchat-sp-8) var(--akchat-sp-6);
+  color: var(--akchat-text-3);
+  text-align: center;
+}
+
+.ankurah-chat .emptyStateArt, .ankurah-chat.emptyStateArt {
+  display: grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  margin-bottom: var(--akchat-sp-3);
+  color: var(--akchat-link);
+  background: var(--akchat-surface-3);
+  border-radius: 18px;
+}
+
+.ankurah-chat .emptyStateArt svg, .ankurah-chat.emptyStateArt svg {
+  width: 28px;
+  height: 28px;
+}
+
+.ankurah-chat .emptyStateTitle, .ankurah-chat.emptyStateTitle {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--akchat-text-2);
+}
+
+.ankurah-chat .emptyStateHint, .ankurah-chat.emptyStateHint {
+  font-size: var(--akchat-fs-md);
+  color: var(--akchat-text-3);
+  line-height: 1.55;
+  max-width: 340px;
+}
+
+/* Message canvas ------------------------------------------------------------ */
+
+.ankurah-chat .messagesContainer, .ankurah-chat.messagesContainer {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--akchat-sp-4) var(--akchat-sp-5) var(--akchat-sp-3);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  /* Hide scrollbar */
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+}
+
+.ankurah-chat .messagesContainer::-webkit-scrollbar, .ankurah-chat.messagesContainer::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+}
+
+/* Single observable box around the row stack (the ResizeObserver target that
+   keeps the tail pinned through async row growth — see chat.rs). Replicates
+   the container's column stacking so row layout is unchanged; the container
+   keeps the scrolling and padding. */
+.ankurah-chat .messagesContent, .ankurah-chat.messagesContent {
+  display: flex;
+  flex-direction: column;
+}
+
+.ankurah-chat .jumpToCurrent, .ankurah-chat.jumpToCurrent {
+  position: absolute;
+  bottom: var(--akchat-sp-5);
+  right: var(--akchat-sp-5);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  background-color: var(--akchat-primary);
+  color: var(--akchat-on-primary);
+  border: none;
+  border-radius: var(--akchat-r-full);
+  font-size: var(--akchat-fs-md);
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--akchat-shadow-2);
+  transition:
+    background-color var(--akchat-t-fast) var(--akchat-ease),
+    transform var(--akchat-t-fast) var(--akchat-ease),
+    box-shadow var(--akchat-t-med) var(--akchat-ease);
+  z-index: 10;
+}
+
+.ankurah-chat .jumpToCurrent svg, .ankurah-chat.jumpToCurrent svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ankurah-chat .jumpToCurrent:hover, .ankurah-chat.jumpToCurrent:hover {
+  background-color: var(--akchat-primary-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--akchat-shadow-3);
+}
+
+.ankurah-chat .jumpToCurrent:active, .ankurah-chat.jumpToCurrent:active {
+  transform: translateY(0);
+}
+
+/* Mobile ---------------------------------------------------------------------- */
+
+@media (max-width: 768px) {
+  .ankurah-chat .messagesContainer, .ankurah-chat.messagesContainer {
+    padding: var(--akchat-sp-3) var(--akchat-sp-3) var(--akchat-sp-2);
+  }
+
+  .ankurah-chat .jumpToCurrent, .ankurah-chat.jumpToCurrent {
+    bottom: var(--akchat-sp-3);
+    right: var(--akchat-sp-3);
+    padding: 8px 14px;
+    font-size: var(--akchat-fs-sm);
+  }
+
+  .ankurah-chat .queryHeader, .ankurah-chat.queryHeader {
+    padding: 6px var(--akchat-sp-3);
+    font-size: 11px;
+  }
+
+  .ankurah-chat .querySelection, .ankurah-chat.querySelection {
+    font-size: 10px;
+  }
+}

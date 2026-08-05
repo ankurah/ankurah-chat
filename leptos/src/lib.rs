@@ -69,6 +69,7 @@
 
 mod composer;
 pub mod context;
+mod debug_header;
 mod dm;
 pub mod emoji;
 pub mod fmt;
@@ -81,17 +82,24 @@ mod message_row;
 pub mod queries;
 pub mod query_registry;
 mod reactions;
+mod read_state;
+mod room_log;
+mod room_selector;
 mod scroll_pane;
 mod styles;
 
 pub use composer::{Composer, ComposerTarget};
 pub use context::{ChatContext, ChatContextBuilder, ChatHooks, MessageSlot, ModeratorDelete, Session};
+pub use debug_header::TimelineDebugHeader;
 pub use dm::{
     conversations, converge_selection, display_name, open_thread_with, pair_rows, partner_of, send_dm, threads_query,
     Conversation, DmReadStateManager, DmSidebar, DmThread,
 };
 pub use message_list::MessageList;
 pub use message_row::MessageRow;
+pub use read_state::ReadStateManager;
 pub use reactions::REACTION_EMOJIS;
+pub use room_log::RoomLog;
+pub use room_selector::RoomSelector;
 pub use scroll_pane::ScrollPane;
 pub use styles::{install_styles, ChatStyles, STYLES};
