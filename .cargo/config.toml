@@ -1,0 +1,7 @@
+# Randomness backend for getrandom 0.3, which reaches wasm32-unknown-unknown
+# transitively (ankurah's entity ids). The cfg names the browser backend; the
+# matching `wasm_js` FEATURE is declared alongside it in model/Cargo.toml,
+# because getrandom 0.3 raises a compile_error when this cfg is set and that
+# feature is not. Scoped to the wasm target so native builds are untouched.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]

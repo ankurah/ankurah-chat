@@ -19,11 +19,17 @@ that want to put live chat surfaces in their own pages.
 
 ## Crates
 
-- `ankurah-chat-model` — the chat collections (Message, Room, User, …) and
-  the mention/URL scanner. **Interop constraint:** these must stay
-  collection- and wire-compatible with the community server they connect to;
-  the scanner's caps (64 KiB window, 20 mentions, 8 URLs) are a shared
-  client/server contract — change in lockstep with the server or not at all.
+- `ankurah-chat-model` — the chat collections (Message, Room, User, Reaction,
+  ReadState, and the DM trio DmThread/DmMessage/DmReadState) and the
+  mention/URL scanner. This is the ONE definition each of them: a chat server
+  and its clients both link this crate, so neither can drift from the other.
+  **Interop constraint:** ankurah derives a collection's identifier from the
+  struct name and a property's from the field name, so those names are wire
+  and are pinned by live data — a rename is a migration, never a refactor.
+  The scanner's caps (64 KiB window, 20 mentions, 8 URLs) are a shared
+  client/server contract on the same terms: change them for every consumer in
+  lockstep, or not at all. Ankurah + serde only; builds for a native server
+  and for `wasm32-unknown-unknown` alike.
 - `ankurah-chat-leptos` — the components. Themable via CSS custom-property
   tokens with neutral defaults; carries its own scoped reset and
   reduced-motion handling; designed to live small (usable down to ~320 px
@@ -40,9 +46,17 @@ preferences — see the workspace `Cargo.toml` comments.
 
 ## Status & trajectory
 
-Scaffold. The components arrive as a cleaned copy of community's (x-ray
-wiring replaced by the generic registry hook); the first consumer is the
-danielnorman.net portfolio embed. community.ankurah.org itself switches from
-its in-tree copies to this crate after ankurah grows native introspection
-(the retirement map is ankurah/community#53). Consumer requirements are
-pinned on ankurah/community#46.
+The model has landed and community.ankurah.org consumes it — the collections
+and the scanner moved OUT of community's own model crate rather than being
+copied, so no second copy of the scanner caps exists to drift. community's
+model crate keeps what is community's alone (moderation records, the
+notification inbox, the link-preview cache) and re-exports what moved.
+
+Next: the components extract to `ankurah-chat-leptos` on the same terms (a
+cleaned copy of community's, x-ray wiring replaced by the generic registry
+hook), with community as the reference consumer and the danielnorman.net
+portfolio embed as the second. Consumer requirements are pinned on
+ankurah/community#46; the wider reconvergence map is ankurah/community#53.
+
+Not published to crates.io yet: consumers pin a git rev while the API is
+still moving under dogfooding.
