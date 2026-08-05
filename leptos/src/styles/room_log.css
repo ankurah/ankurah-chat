@@ -93,10 +93,10 @@
 
 .ankurah-chat .queryStatus.loading, .ankurah-chat.queryStatus.loading {
   color: var(--akchat-unread-bg);
-  animation: pulse 1s ease-in-out infinite;
+  animation: akchat-pulse 1s ease-in-out infinite;
 }
 
-@keyframes pulse {
+@keyframes akchat-pulse {
   0%,
   100% {
     opacity: 1;

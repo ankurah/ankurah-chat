@@ -38,11 +38,21 @@ const STYLE_ELEMENT_ID: &str = "ankurah-chat-styles";
 
 /// Put [`STYLES`] in the document's head, once.
 ///
-/// A host that wants the rules to sit EARLIER in the cascade than its own
-/// stylesheets should call this before those load — the components' selectors
-/// each carry the scope class, so they outrank an unscoped host rule wherever
-/// they land, and a host that means to override one should say so with a
-/// `.ankurah-chat` prefix of its own.
+/// WHERE IT LANDS IN THE CASCADE, plainly: appended to `<head>` at the moment
+/// of the call, which for a host whose own stylesheets are `<link>` elements in
+/// the document — a trunk build, say — is always AFTER them, no matter how
+/// early this is called. Those links are parsed with the document; this runs
+/// once wasm has started.
+///
+/// So at EQUAL specificity the components win. That is usually right — every
+/// selector here carries the scope class, so it is already more specific than
+/// an unscoped host rule — but a host overriding a component rule has to mean
+/// it: prefix with `.ankurah-chat` to tie, and add one more class or an
+/// attribute to win. Community's inspector does exactly that, keying its
+/// bubble rules on `[data-entity-id][data-collection]`.
+///
+/// A host that would rather control the order completely can take [`STYLES`]
+/// and place the text itself.
 pub fn install_styles() {
     let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
     if document.get_element_by_id(STYLE_ELEMENT_ID).is_some() {

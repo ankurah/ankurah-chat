@@ -106,11 +106,11 @@
 
 /* Bubbles ------------------------------------------------------------------ */
 
-/* Cursor contract (#59): bubble chrome shows the default arrow, prose shows
-   the text cursor (it is selectable), and pointer appears only on genuinely
-   clickable things — links, mention chips, reaction chips, the ⋯ trigger.
-   X-ray mode's whole-bubble zoom-in cursor stays scoped to .xrayInspectable
-   (see XRay.css). */
+/* Cursor contract: bubble chrome shows the default arrow, prose shows the text
+   cursor (it is selectable), and pointer appears only on genuinely clickable
+   things — links, mention chips, reaction chips, the ⋯ trigger. A host that
+   makes the whole bubble mean something else — an inspector keyed on
+   `data-entity-id` — overrides these from its own stylesheet. */
 .ankurah-chat .messageBubble, .ankurah-chat.messageBubble {
   position: relative; /* anchors the hover/focus actions trigger */
   padding: 9px 13px;
@@ -122,7 +122,7 @@
   word-wrap: break-word;
 }
 
-/* Visible actions affordance (#16): the keyboard/hover path to the same menu
+/* Visible actions affordance: the keyboard/hover path to the same menu
    right-click opens. Hidden until the row is hovered or focus lands inside. */
 
 .ankurah-chat .messageActions, .ankurah-chat.messageActions {
@@ -204,7 +204,7 @@
   cursor: text;
 }
 
-/* Reply preview (#23): compact embed of the original, above the reply body,
+/* Reply preview: compact embed of the original, above the reply body,
    inside the bubble. A button — clicking jumps to the original when it is
    rendered in the timeline. */
 
@@ -267,13 +267,13 @@
   color: rgb(242 250 246 / 62%);
 }
 
-/* Jump-to-original wash (#23): plays once; the class is removed afterwards
+/* Jump-to-original wash: plays once; the class is removed afterwards
    (message_row.rs) so a repeat jump re-triggers it. */
 .ankurah-chat .messageBubble.replyJumpFlash, .ankurah-chat.messageBubble.replyJumpFlash {
-  animation: replyJumpFlash 1.4s var(--akchat-ease) 1;
+  animation: akchat-replyJumpFlash 1.4s var(--akchat-ease) 1;
 }
 
-@keyframes replyJumpFlash {
+@keyframes akchat-replyJumpFlash {
   0%,
   55% {
     outline: 2px solid var(--akchat-unread-bg);
@@ -288,7 +288,7 @@
   }
 }
 
-/* Tombstones (#10): deleted rows stay in the timeline, muted, content gone.
+/* Tombstones: deleted rows stay in the timeline, muted, content gone.
    Applies over .ownMessage too — a removed message sheds its bubble color. */
 
 .ankurah-chat .messageBubble.tombstone, .ankurah-chat.messageBubble.tombstone,
@@ -305,7 +305,7 @@
   color: var(--akchat-text-3);
 }
 
-/* "(edited)" suffix (#11): inline after plain text, trailing line after
+/* "(edited)" suffix: inline after plain text, trailing line after
    block-level markdown content. Hover shows the edit timestamp. */
 
 .ankurah-chat .messageEdited, .ankurah-chat.messageEdited {
@@ -320,7 +320,7 @@
   color: rgb(242 250 246 / 60%);
 }
 
-/* Co-edit indicator (#38): a quiet inline pill after the message text, so a
+/* Co-edit indicator: a quiet inline pill after the message text, so a
    collaborative message is recognizable at a glance in both themes. */
 
 .ankurah-chat .coEditBadge, .ankurah-chat.coEditBadge {

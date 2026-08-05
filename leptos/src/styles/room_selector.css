@@ -1,6 +1,5 @@
-/* Room sidebar — evergreen chrome, mint pill for the active room. */
-
-
+/* The room list: a header, the rows, and the create-room input. The rail
+ * they sit in belongs to the host. */
 
 .ankurah-chat .sidebarHeader, .ankurah-chat.sidebarHeader {
   padding: 16px 16px 8px;
@@ -151,10 +150,8 @@
   line-height: 1.5;
 }
 
-/* Mobile: sidebar becomes a horizontal chip strip. */
+/* Mobile: the rows become a horizontal chip strip. */
 @media (max-width: 768px) {
-  
-
   .ankurah-chat .sidebarHeader, .ankurah-chat.sidebarHeader {
     padding: 10px 12px 6px;
     flex-shrink: 0;

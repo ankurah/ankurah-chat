@@ -8,10 +8,10 @@
   border-radius: 12px;
   box-shadow: var(--akchat-shadow-3);
   z-index: 1000;
-  animation: contextMenuIn 120ms var(--akchat-ease) both;
+  animation: akchat-contextMenuIn 120ms var(--akchat-ease) both;
 }
 
-@keyframes contextMenuIn {
+@keyframes akchat-contextMenuIn {
   from {
     opacity: 0;
     transform: translateY(-3px) scale(0.98);
@@ -23,7 +23,7 @@
   }
 }
 
-/* Quick-reaction row (#14) at the top of the menu. */
+/* Quick-reaction row at the top of the menu. */
 
 .ankurah-chat .contextMenuReactions, .ankurah-chat.contextMenuReactions {
   display: flex;
@@ -86,7 +86,7 @@
   background-color: var(--akchat-surface-3);
 }
 
-/* Keyboard navigation (#16): match the hover wash; the global outline ring
+/* Keyboard navigation: match the hover wash; the global outline ring
    stays on :focus-visible, inset so it is not clipped by the menu edge. */
 .ankurah-chat .contextMenuItem:focus-visible, .ankurah-chat.contextMenuItem:focus-visible {
   background-color: var(--akchat-surface-3);

@@ -1,4 +1,4 @@
-/* Markdown subset inside message bubbles (#9). Rendered as typed nodes by
+/* Markdown subset inside message bubbles. Rendered as typed nodes by
    src/markdown.rs; these classes are the whole styling surface. */
 
 /* Block rhythm: paragraphs/code/quotes stack with a small gap. The fast path
@@ -118,7 +118,7 @@
   color: var(--akchat-accent);
 }
 
-/* Mentions (#18) ------------------------------------------------------------
+/* Mentions ------------------------------------------------------------
    `<@id>` tokens render as inline @name chips; unknown ids stay muted. */
 
 .ankurah-chat .mdMention, .ankurah-chat.mdMention {
@@ -135,7 +135,7 @@
   background: rgb(255 255 255 / 13%);
 }
 
-/* Resolved mentions are buttons — they open the member detail sidebar (#57).
+/* Resolved mentions are buttons — they open the member detail sidebar.
    (Unknown mentions stay inert spans, so no hover state applies to them.) */
 .ankurah-chat button.mdMention:hover, button.ankurah-chat.mdMention:hover {
   background: color-mix(in srgb, var(--akchat-link) 22%, transparent);

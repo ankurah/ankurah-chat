@@ -81,7 +81,7 @@
   background-color: var(--akchat-chrome-active);
 }
 
-@keyframes spin {
+@keyframes akchat-spin {
   from {
     transform: rotate(0deg);
   }

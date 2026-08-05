@@ -1,7 +1,7 @@
 /* Composer — pill input plus primary send. */
 
 .ankurah-chat .inputContainer, .ankurah-chat.inputContainer {
-  position: relative; /* anchors the mention popup (#18) */
+  position: relative; /* anchors the mention popup */
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -11,7 +11,7 @@
   border-top: 1px solid var(--akchat-border);
 }
 
-/* Mention autocomplete (#18) ------------------------------------------------ */
+/* Mention autocomplete ------------------------------------------------ */
 
 .ankurah-chat .mentionPopup, .ankurah-chat.mentionPopup {
   position: absolute;
@@ -74,7 +74,7 @@
   user-select: none;
 }
 
-/* Emoji autocomplete (#54): shares the mention popup shell; the glyph sits
+/* Emoji autocomplete: shares the mention popup shell; the glyph sits
    where the avatar would. */
 .ankurah-chat .emojiGlyph, .ankurah-chat.emojiGlyph {
   display: grid;
@@ -94,7 +94,7 @@
 .ankurah-chat .mentionAvatar.hue-6, .ankurah-chat.mentionAvatar.hue-6 { background: var(--akchat-hue-6); }
 .ankurah-chat .mentionAvatar.hue-7, .ankurah-chat.mentionAvatar.hue-7 { background: var(--akchat-hue-7); }
 
-/* Reply chip (#23): pinned above the input while a reply is armed. */
+/* Reply chip: pinned above the input while a reply is armed. */
 
 .ankurah-chat .replyingNotice, .ankurah-chat.replyingNotice {
   display: flex;
@@ -185,11 +185,11 @@
 .ankurah-chat .inputRow, .ankurah-chat.inputRow {
   display: flex;
   gap: var(--akchat-sp-2);
-  /* The composer grows upward (#50); buttons stay pinned to its bottom line. */
+  /* The composer grows upward; buttons stay pinned to its bottom line. */
   align-items: flex-end;
 }
 
-/* The composer textarea (#50): collapsed it reads as the original pill;
+/* The composer textarea: collapsed it reads as the original pill;
    grown it becomes a rounded rect. Height is driven by the autosize JS
    (message_input.rs); max-height here is defense in depth. */
 .ankurah-chat .input, .ankurah-chat.input {

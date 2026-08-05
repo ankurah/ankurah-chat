@@ -72,6 +72,36 @@ install_styles();
 view! { <RoomLog room=selected_room current_user=me users=users read_state=cursors /> }
 ```
 
+The surfaces are `RoomSelector`, `RoomLog`, `Composer`, `DmSidebar` and
+`DmConversation`; mount any of them, in any combination.
+
+### Theming
+
+Every colour and metric is an `--akchat-*` custom property. Re-declare the ones
+you want **on `.ankurah-chat`**, which is the class each component root carries:
+
+```css
+.ankurah-chat { --akchat-bg: #101014; --akchat-text: #e7e7ea; }
+```
+
+**Not on `:root`.** The crate declares its own defaults on the component root
+itself, and a declaration on an element always beats a value inherited from an
+ancestor — specificity only orders declarations competing for the same element.
+A `:root` mapping would be inherited down and then overwritten by the defaults
+it was meant to replace. On `.ankurah-chat` it is one class against the crate's
+zero (its defaults use `:where`), so your value wins.
+
+### Signing in mid-visit
+
+`ChatContext::set_session(context, viewer)` swaps the session under mounted
+components. Nothing unmounts, so the draft, the armed reply, the selected room
+and the open conversation all stay. The timeline's loaded window does not: a
+`ScrollManager` takes its context at construction and ankurah-virtual-scroll
+0.9.0 cannot re-point one, so the pane rebuilds and the reader lands at the live
+tail. Rebuild anything you own on your side too — the LiveQueries you passed in
+(rooms, users, DM threads) and the two read-cursor managers, which are
+constructed with the reader's id.
+
 Then, on your side:
 
 - **Adopt the pin family above.** ankurah-signals 0.9.0 holds js-sys/web-sys at
