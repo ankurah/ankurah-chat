@@ -2,13 +2,13 @@ use leptos::ev::MouseEvent;
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-use ankurah::{EntityId, LiveQuery, View as _};
-use ankurah_chat_model::{MessageView, UserView};
+use ankurah::{EntityId, View as _};
+use ankurah_chat_model::MessageView;
 use ankurah_signals::Get as AnkurahGet;
 
 use std::collections::HashMap;
 
-use crate::context::{chat, Live};
+use crate::context::chat;
 use crate::fmt;
 use crate::message_context_menu::MessageContextMenu;
 use crate::reactions::{ReactionBar, ReactionChip};
@@ -24,8 +24,6 @@ use crate::reactions::{ReactionBar, ReactionChip};
 #[component]
 pub fn MessageRow(
     message: MessageView,
-    #[prop(into)]
-    users: Live<LiveQuery<UserView>>,
     /// The reader's own id, as the list resolved it from the session. Passed
     /// down rather than read again so every row in one render agrees, and so
     /// the list's `For` key can carry it — a reader who signs in mid-visit
@@ -60,10 +58,13 @@ pub fn MessageRow(
     let author_user_id = message.user().map(|r| r.id().to_base64()).unwrap_or_default();
 
     // Find the author from the users list (reactive: display names can change).
-    let author = move || {
-        let user_list = users.current().get();
+    let author = {
+        let chat = chat.clone();
+        move || {
+        let user_list = chat.members().map(|q| q.get()).unwrap_or_default();
         let message_user = message_for_author.user().map(|r| r.id().to_base64()).unwrap_or_default();
         user_list.iter().find(|u| u.id().to_base64() == message_user).cloned()
+        }
     };
 
     let is_own_message = current_user_id_for_own

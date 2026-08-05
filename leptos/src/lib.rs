@@ -100,13 +100,12 @@ mod styles;
 
 pub use composer::{Composer, ComposerTarget};
 pub use context::{
-    chat, ChatContext, ChatContextBuilder, ChatHooks, Live, MenuActions, MessageSlot, ModeratorDelete, Session,
-    WriteSession,
+    chat, ChatContext, ChatContextBuilder, ChatHooks, MenuActions, MessageSlot, ModeratorDelete, Session, WriteSession,
 };
 pub use debug_header::TimelineDebugHeader;
 pub use dm::{
-    conversations, converge_selection, display_name, open_thread_with, pair_rows, partner_of, send_dm, threads_query,
-    Conversation, DmConversation, DmReadStateManager, DmSidebar,
+    conversations, display_name, open_thread_with, pair_rows, partner_of, send_dm, Conversation, DmConversation,
+    DmSidebar,
 };
 pub use message_list::MessageList;
 pub use message_row::MessageRow;

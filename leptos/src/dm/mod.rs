@@ -9,27 +9,28 @@
 //!
 //! The whole answer is agreement rather than prevention:
 //!
-//! 1. participants are stored in [`ankurah_chat_model::canonical_pair`] order
+//! 1. A CONVERSATION IS ITS TWO PEOPLE, never a row. Selection, the composer's
+//!    target and every predicate below key on the participant pair, so there is
+//!    no moment at which a reader is looking at "the wrong row" — the question
+//!    does not arise.
+//! 2. participants are stored in [`ankurah_chat_model::canonical_pair`] order
 //!    and looked up in BOTH orders, so neither side can miss a thread the
 //!    other created — not even one written with the pair reversed, which a
 //!    policy has no way to refuse (see `find_or_create_thread`);
-//! 2. when the query does return more than one, every reader picks the same one
-//!    — [`ankurah_chat_model::canonical_thread`], the lowest entity id — and posts
-//!    there;
-//! 3. an open thread view re-resolves itself whenever the thread set changes
-//!    ([`converge_selection`]), so a client that opened the twin during the race
-//!    window slides onto the winner without the reader noticing;
-//! 4. and every view that READS a conversation reads all of the pair's rows,
-//!    not just the winner ([`Conversation`], [`pair_rows`]) — the twin keeps
-//!    whatever landed in it during the race, and agreeing on where to write
-//!    next must not make what was already written unreachable.
+//! 3. when the lookup does return more than one, every reader picks the same
+//!    one to WRITE into — [`ankurah_chat_model::canonical_thread`], the lowest
+//!    entity id;
+//! 4. and every READ spans all of the pair's rows, not just the winner
+//!    ([`Conversation`], [`pair_rows`]) — the twin keeps whatever landed in it
+//!    during the race, and agreeing on where to write next must not make what
+//!    was already written unreachable.
 //!
 //! A deployment's own tests are where that convergence is proved end to end;
 //! what this module owes them is that every path here agrees on
 //! [`ankurah_chat_model::canonical_thread`].
 
 use ankurah::{model::Mutable, EntityId, LiveQuery};
-use ankurah_signals::{Get as AnkurahGet, Peek};
+use ankurah_signals::Peek;
 use ankurah_chat_model::{
     canonical_pair, canonical_thread, dm_partner, DmMessage, DmThread, DmThreadView, UserView, THREADS_FOR_PAIR,
 };
@@ -44,23 +45,8 @@ pub use read_state::DmReadStateManager;
 pub use sidebar::DmSidebar;
 pub use thread_view::DmConversation;
 
-use crate::context::{ChatContext, Live, WriteSession};
+use crate::context::{ChatContext, WriteSession};
 use crate::queries;
-
-/// The viewer's threads, live. Scoped by policy to threads the viewer is in —
-/// the resultset is self-shaping, so no client-side membership filter is needed
-/// (and one would be a lie about where enforcement lives). Tombstoned threads
-/// are excluded, though nothing writes that flag today: the DM rate limiter
-/// tombstones the offending message and leaves the conversation standing (see
-/// `DmThread::deleted` and docs/moderation.md).
-/// Call from a component body or an effect — the handshake resolves through
-/// the reactive owner chain (see [`crate::context`]).
-pub fn threads_query() -> LiveQuery<DmThreadView> {
-    crate::context::chat()
-        .context_untracked()
-        .query::<DmThreadView>("deleted = false")
-        .expect("failed to create DmThreadView LiveQuery")
-}
 
 /// One conversation per correspondent, as the UI has to treat it: the row
 /// every reader agrees to call THE thread for that pair, plus every row the
@@ -107,14 +93,14 @@ pub fn conversations(threads: &[DmThreadView]) -> Vec<Conversation> {
     conversations
 }
 
-/// Every thread row belonging to the same pair as `thread`, including it.
+/// Every thread row for the conversation between `viewer` and `partner`.
 ///
-/// What it is for: any view opened on one row of a raced pair has to read the
-/// whole pair, or the messages that landed in the other row are unreachable
-/// (see [`Conversation`]).
-pub fn pair_rows(threads: &[DmThreadView], thread: &DmThreadView) -> Vec<EntityId> {
-    let (Ok(a), Ok(b)) = (thread.a(), thread.b()) else { return vec![thread.id()] };
-    let pair = canonical_pair(a.id(), b.id());
+/// What it is for: a conversation opened while a first-message race is
+/// resolving spans more than one row, and a view that read only one of them
+/// would show an empty conversation with the words sitting one row over. Every
+/// READ goes across the pair; only the write picks a row.
+pub fn pair_rows(threads: &[DmThreadView], viewer: EntityId, partner: EntityId) -> Vec<EntityId> {
+    let pair = canonical_pair(viewer, partner);
     let mut rows: Vec<EntityId> = threads
         .iter()
         .filter(|t| {
@@ -123,15 +109,6 @@ pub fn pair_rows(threads: &[DmThreadView], thread: &DmThreadView) -> Vec<EntityI
         })
         .map(|t| t.id())
         .collect();
-    if !rows.contains(&thread.id()) {
-        // The open selection is not in the live thread set. Usually that means
-        // the set has not caught up yet — `open_thread_with` selects a row from
-        // its own fetch — but it equally covers a selected row that has since
-        // left the set, which `deleted = false` would do the day anything
-        // tombstones a thread. Either way, the row the reader has open belongs
-        // in what the reader is shown.
-        rows.push(thread.id());
-    }
     rows.sort();
     rows
 }
@@ -142,52 +119,20 @@ pub fn partner_of(thread: &DmThreadView, viewer: EntityId) -> Option<EntityId> {
     dm_partner(a, b, viewer)
 }
 
-/// Keep an open thread pointed at the canonical thread for its pair.
+/// Open the conversation with `partner`, creating its thread row if this is
+/// the first message either way.
 ///
-/// Install once per app: whenever the thread set changes, a selection sitting
-/// on a race twin slides onto the winner. Without this, two tabs that opened
-/// the same correspondent concurrently would each keep talking into their own
-/// row — the messages would all be readable, but the conversation would look
-/// like it had forked.
+/// The SELECTION is the partner's id, set immediately, so the conversation
+/// opens without waiting on a round trip; the row is found or created behind
+/// it. That ordering is also why the old converge-the-selection effect is
+/// gone: a selection that names a person cannot drift onto the losing row of a
+/// first-message race, because it never named a row.
 ///
-/// Takes the thread set as a [`Live`] and reads it TRACKED, which is what
-/// keeps install-once true across a sign-in. The effect already has to track
-/// the query to fire at all; tracking the handle as well means a host that
-/// swaps its thread set gets convergence re-subscribed to the new one, instead
-/// of a race resolver still watching a session nobody is using. Reading it
-/// untracked would have left exactly that.
-pub fn converge_selection(threads: Live<LiveQuery<DmThreadView>>, selected: RwSignal<Option<DmThreadView>>) {
-    Effect::new(move |_| {
-        let all = threads.current().get();
-        let Some(current) = selected.get() else { return };
-        let (Ok(a), Ok(b)) = (current.a(), current.b()) else { return };
-        let pair = canonical_pair(a.id(), b.id());
-        let candidates: Vec<EntityId> = all
-            .iter()
-            .filter(|t| {
-                let (Ok(ta), Ok(tb)) = (t.a(), t.b()) else { return false };
-                canonical_pair(ta.id(), tb.id()) == pair
-            })
-            .map(|t| t.id())
-            .collect();
-        let Some(winner) = canonical_thread(candidates) else { return };
-        if winner != current.id()
-            && let Some(row) = all.iter().find(|t| t.id() == winner)
-        {
-            tracing::info!("DM thread race resolved: moving from {} to {}", current.id().to_base64(), winner.to_base64());
-            selected.set(Some(row.clone()));
-        }
-    });
-}
-
-/// Open the thread with `partner`, creating it if this is the first DM.
-///
-/// Race-safe by construction rather than by locking: the query is on the
+/// Race-safe by construction rather than by locking: the lookup is on the
 /// canonical pair, so it sees any thread the other side already created, and a
-/// twin created in the same instant is resolved by [`converge_selection`] as
-/// soon as it syncs. Fire-and-forget from a click handler; failures are logged
-/// and leave the selection untouched.
-pub fn open_thread_with(chat: &ChatContext, partner: EntityId, selected: RwSignal<Option<DmThreadView>>) {
+/// twin created in the same instant is read alongside it by every view (see
+/// [`pair_rows`]). Fire-and-forget from a click handler; failures are logged.
+pub fn open_thread_with(chat: &ChatContext, partner: EntityId, selected: RwSignal<Option<EntityId>>) {
     // Opening a conversation writes a thread row, and a thread has two named
     // participants — there is nothing to write until we know who the reader
     // is. The handshake comes in as an argument because this is called from
@@ -200,10 +145,10 @@ pub fn open_thread_with(chat: &ChatContext, partner: EntityId, selected: RwSigna
         tracing::warn!("refusing to open a DM thread with yourself");
         return;
     }
+    selected.set(Some(partner));
     wasm_bindgen_futures::spawn_local(async move {
-        match find_or_create_thread(&session, partner).await {
-            Ok(thread) => selected.set(Some(thread)),
-            Err(e) => tracing::error!("Failed to open DM thread: {}", e),
+        if let Err(e) = find_or_create_thread(&session, partner).await {
+            tracing::error!("Failed to open DM thread: {}", e);
         }
     });
 }
@@ -256,16 +201,16 @@ async fn find_or_create_thread(session: &WriteSession, partner: EntityId) -> Res
 /// The session is an argument rather than something looked up here, so the
 /// author and the context are the pair the caller resolved before it deferred
 /// — see [`crate::ChatContext::write_session`].
-pub async fn send_dm(
-    session: &WriteSession,
-    thread: &DmThreadView,
-    wire_text: String,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn send_dm(session: &WriteSession, partner: EntityId, wire_text: String) -> Result<(), Box<dyn std::error::Error>> {
+    // The row to write into is resolved from the pair, not carried in: a
+    // conversation is its two participants, and which row represents it is
+    // something a first-message race can still be deciding.
+    let thread = find_or_create_thread(session, partner).await?;
     let a = thread.a()?;
     let b = thread.b()?;
     let trx = session.context.begin();
     trx.create(&DmMessage {
-        thread: ankurah::Ref::from(thread),
+        thread: ankurah::Ref::from(&thread),
         a,
         b,
         user: session.viewer.into(),

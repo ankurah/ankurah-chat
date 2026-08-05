@@ -20,40 +20,29 @@
 //! an anonymous context — the components render, the timeline fills, the
 //! composer refuses to send and calls the host's auth-demand callback instead
 //! — and then, once the reader signs in, call [`ChatContext::set_session`]
-//! with the authenticated context. Nothing unmounts, so the composer's draft,
-//! the armed reply, the selected room, the open conversation, the message
-//! being edited and any popover the host is showing all stay exactly as they
-//! were, and the components rebuild their queries against the new context
-//! where they stand.
+//! with the authenticated context. That call is the whole of it.
 //!
-//! The host has work to do too, and it is work it can do IN PLACE. Everything
-//! it hands the components — the rooms list, the members list, the DM thread
-//! set, the two read-cursor managers — is scoped to a session, so all of it
-//! has to be rebuilt against the new context. That is why those props are
-//! [`Live`] rather than plain values: the host swaps what its signal holds,
-//! and the components re-point where they stand. Handing them as plain values
-//! and rebuilding by remounting would forfeit the very state this promises to
-//! keep.
-//!
-//! A host with nothing to swap passes the value directly — `Live` is
-//! `#[prop(into)]`-friendly. A constant subscribes to nothing, which is the
-//! part that matters; it is not free, though, because every read still runs
-//! the closure and clones the handle (an `Arc` bump, for a `LiveQuery` or a
-//! cursor manager).
-//!
-//! Do the whole swap in ONE SYNCHRONOUS BLOCK: `set_session` and each handle
-//! the host replaces are separate signal writes, and components read between
-//! them if given the chance. Split across two ticks there is a moment where the
-//! session names one reader and the queries still answer for the other.
+//! Nothing unmounts, so the composer's draft, the armed reply, the selected
+//! room, the open conversation, the message being edited and any popover the
+//! host is showing all stay exactly as they were. Everything scoped to a
+//! session — the members list, the rooms list, the DM thread set, both
+//! read-cursor managers — belongs to this handshake, not to the host, and is
+//! rebuilt here the moment the generation moves. There is nothing for a host
+//! to co-swap and therefore no window in which half the surfaces are reading
+//! through one session and half through another.
 //!
 //! WHAT DOES NOT SURVIVE, stated plainly: the timeline's loaded window. A
 //! `ScrollManager` takes its context as a constructor argument and
 //! ankurah-virtual-scroll 0.9.0 offers no way to re-point one, so the pane
 //! builds a fresh manager and the reader lands at the live tail rather than
-//! wherever they had paged back to. A reader who signs in while scrolled
-//! through history loses their place in it. Closing that needs the scroller to
-//! accept a new context, or an anchor-restoring jump API to page back to where
-//! they were.
+//! wherever they had paged back to. Closing that needs the scroller to accept
+//! a new context, or an anchor-restoring jump API.
+//!
+//! A host that would RATHER have teardown-and-rebuild semantics — everything
+//! discarded, including the draft — can have them without asking anything of
+//! this crate: key the subtree on [`ChatContext::generation`] and Leptos will
+//! unmount and remount it on every swap. Neither model is privileged; the
+//! difference is one `key=` in the host's view.
 //!
 //! # Reaching the handshake
 //!
@@ -66,12 +55,17 @@
 //! take a [`WriteSession`] instead, which resolves the reader and the context
 //! together and is the one place the auth demand is raised.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
-use ankurah::{Context, EntityId};
-use ankurah_chat_model::MessageView;
+use ankurah::{Context, EntityId, LiveQuery, View};
+use ankurah_chat_model::{DmThreadView, MessageView, ReactionView, RoomView, UserView};
 use leptos::prelude::*;
 use send_wrapper::SendWrapper;
+
+use crate::dm::DmReadStateManager;
+use crate::query_registry::{self, QueryRegistration};
+use crate::read_state::ReadStateManager;
 
 /// Who the components are acting as, and the ankurah context they act through.
 #[derive(Clone)]
@@ -143,51 +137,6 @@ pub struct ChatHooks {
     pub menu_actions: Option<MenuActions>,
 }
 
-/// Something the host owns, hands in, and may swap in place.
-///
-/// What it is for: letting a reader sign in without losing what they were
-/// doing. Every LiveQuery and every read-cursor manager a host passes these
-/// components is scoped to one session — new context, new queries — and a
-/// plain value handed over at mount can only be replaced by remounting, which
-/// takes the draft, the armed reply and the open conversation with it. A
-/// `Live` is read reactively, so the host swaps what its signal holds and the
-/// components re-point in place.
-///
-/// A host with nothing to swap just passes the value: `From` makes it a
-/// constant. A constant subscribes to nothing — no re-renders, no
-/// invalidations — but reading one is not free: [`Live::current`] runs the
-/// closure and clones out of the `SendWrapper` every time, which for a
-/// `LiveQuery` or a cursor manager is an `Arc` bump.
-pub struct Live<T: Clone + 'static>(ArcSignal<SendWrapper<T>>);
-
-impl<T: Clone + 'static> Clone for Live<T> {
-    fn clone(&self) -> Self { Self(self.0.clone()) }
-}
-
-impl<T: Clone + 'static> Live<T> {
-    /// A value that never changes.
-    pub fn constant(value: T) -> Self {
-        let held = SendWrapper::new(value);
-        Self(ArcSignal::derive(move || held.clone()))
-    }
-
-    /// A value the host may swap. The closure is read reactively, so a
-    /// component that uses this re-points when it changes.
-    pub fn reactive(read: impl Fn() -> T + Send + Sync + 'static) -> Self {
-        Self(ArcSignal::derive(move || SendWrapper::new(read())))
-    }
-
-    /// What the host is holding right now, tracked.
-    pub fn current(&self) -> T { self.0.get().take() }
-
-    /// What the host is holding right now, without subscribing.
-    pub fn current_untracked(&self) -> T { self.0.get_untracked().take() }
-}
-
-impl<T: Clone + 'static> From<T> for Live<T> {
-    fn from(value: T) -> Self { Self::constant(value) }
-}
-
 /// Who is writing, and what through — resolved together, at one instant.
 ///
 /// Two things are true of every write in these components: it needs an author,
@@ -213,12 +162,54 @@ pub struct WriteSession {
 #[derive(Clone)]
 pub struct ChatContext(SendWrapper<Arc<Inner>>);
 
+/// What one session's worth of shared handles looks like once built.
+///
+/// These belong to the handshake rather than to any component or to the host.
+/// Every surface wants the same members list; the unread badges in the rail
+/// and the read cursor the log advances have to be the SAME manager, or a
+/// badge clears on a round trip instead of instantly; and all of it is scoped
+/// to the session, so all of it dies together when the session moves. One
+/// owner, one lifetime, one rebuild.
+#[derive(Default)]
+struct Shared {
+    /// The generation these were built against. A read for a newer one clears
+    /// the lot first — which is what drops the old queries and lets the old
+    /// cursor managers die (their subscriptions hold only weak handles back,
+    /// precisely so that dropping the manager is enough).
+    built_for: u64,
+    members: Option<(LiveQuery<UserView>, QueryRegistration)>,
+    reactions: Option<(LiveQuery<ReactionView>, QueryRegistration)>,
+    rooms: Option<(LiveQuery<RoomView>, QueryRegistration)>,
+    dm_threads: Option<(LiveQuery<DmThreadView>, QueryRegistration)>,
+    room_cursors: Option<ReadStateManager>,
+    dm_cursors: Option<DmReadStateManager>,
+}
+
+impl Shared {
+    /// Throw away anything built for an older session.
+    fn reset_if_stale(&mut self, generation: u64) {
+        if self.built_for != generation {
+            *self = Shared { built_for: generation, ..Shared::default() };
+        }
+    }
+}
+
 struct Inner {
     session: ArcRwSignal<SendWrapper<Session>>,
     /// Bumped by every [`ChatContext::set_session`]. `ankurah::Context` has no
     /// equality, so this is how a component that built something against a
     /// session recognises that it is looking at a different one.
     generation: ArcRwSignal<u64>,
+    /// Which rooms this deployment offers, as an AnkQL predicate. The room
+    /// SET is a host choice — a page may want one room, or three — and it is
+    /// declared once here rather than per component, because the rail's unread
+    /// badges have to window exactly the rooms the selector lists, and the
+    /// badges are shared.
+    rooms_where: String,
+    /// Built lazily, per session. `RefCell` because this is a browser crate on
+    /// one thread, and the whole handshake already lives inside a
+    /// `SendWrapper`.
+    shared: RefCell<Shared>,
     online: Box<dyn Fn() -> bool>,
     can_moderate: Box<dyn Fn() -> bool>,
     demand_auth: Option<Box<dyn Fn()>>,
@@ -228,6 +219,7 @@ struct Inner {
 /// Collects the handshake's parts. Only the ankurah context is required.
 pub struct ChatContextBuilder {
     session: Session,
+    rooms_where: String,
     online: Option<Box<dyn Fn() -> bool>>,
     can_moderate: Option<Box<dyn Fn() -> bool>>,
     demand_auth: Option<Box<dyn Fn()>>,
@@ -239,6 +231,7 @@ impl ChatContext {
     pub fn new(context: Context) -> ChatContextBuilder {
         ChatContextBuilder {
             session: Session { context, viewer: None },
+            rooms_where: "true".to_string(),
             online: None,
             can_moderate: None,
             demand_auth: None,
@@ -263,6 +256,136 @@ impl ChatContext {
 
     /// Which session this is, without subscribing.
     pub fn generation_untracked(&self) -> u64 { self.0.generation.get_untracked() }
+
+    /// Every member, live — for author names, mention rendering and the
+    /// composer's autocomplete.
+    ///
+    /// Built here rather than by a host and rather than per component: every
+    /// surface wants the same rows, the timelines remount whenever the reader
+    /// changes room, and a query per mount would mean a registration per mount.
+    /// Reading this SUBSCRIBES to the session, so a caller re-runs and gets the
+    /// rebuilt query when the reader signs in.
+    ///
+    /// `None` only if the query could not be created, which is logged; a
+    /// surface without it shows ids instead of names rather than failing.
+    pub fn members(&self) -> Option<LiveQuery<UserView>> {
+        let generation = self.0.generation.get();
+        {
+            let mut shared = self.0.shared.borrow_mut();
+            shared.reset_if_stale(generation);
+            if shared.members.is_none() {
+                shared.members = self.build_query("true", "members");
+            }
+            return shared.members.as_ref().map(|(query, _)| query.clone());
+        }
+    }
+
+    /// Every active reaction, live.
+    ///
+    /// One standing query rather than one per row: `Reaction` carries no room
+    /// ref, so a room-scoped predicate is inexpressible, and a query per row
+    /// would churn subscriptions with every virtual-scroll mount. Here rather
+    /// than in the timeline because the timeline remounts on every room
+    /// change, and this does not have to.
+    pub fn reactions(&self) -> Option<LiveQuery<ReactionView>> {
+        let generation = self.0.generation.get();
+        let mut shared = self.0.shared.borrow_mut();
+        shared.reset_if_stale(generation);
+        if shared.reactions.is_none() {
+            shared.reactions = self.build_query("active = true", "reactions");
+        }
+        shared.reactions.as_ref().map(|(query, _)| query.clone())
+    }
+
+    /// The rooms this deployment offers, live — the set the host declared with
+    /// [`ChatContextBuilder::rooms_where`], or all of them.
+    pub fn rooms(&self) -> Option<LiveQuery<RoomView>> {
+        let generation = self.0.generation.get();
+        let mut shared = self.0.shared.borrow_mut();
+        shared.reset_if_stale(generation);
+        if shared.rooms.is_none() {
+            let predicate = format!("{} ORDER BY name ASC", self.0.rooms_where);
+            shared.rooms = self.build_query(&predicate, "rooms");
+        }
+        shared.rooms.as_ref().map(|(query, _)| query.clone())
+    }
+
+    /// The reader's own conversations, live.
+    ///
+    /// Self-shaping where a deployment scopes `dmthread` reads to its
+    /// participants: a plain `deleted = false` returns exactly the reader's
+    /// own. There is no client-side membership filter on purpose — one would
+    /// read as though the privacy came from here, and it comes from the
+    /// server's policy.
+    pub fn dm_threads(&self) -> Option<LiveQuery<DmThreadView>> {
+        let generation = self.0.generation.get();
+        let mut shared = self.0.shared.borrow_mut();
+        shared.reset_if_stale(generation);
+        if shared.dm_threads.is_none() {
+            shared.dm_threads = self.build_query("deleted = false", "dm threads");
+        }
+        shared.dm_threads.as_ref().map(|(query, _)| query.clone())
+    }
+
+    /// The reader's per-room read cursors, and the unread counts they drive.
+    ///
+    /// One manager for the whole handshake, deliberately: the rail draws the
+    /// badge and the log advances the cursor, and two managers would mean the
+    /// badge cleared on a server round trip instead of the moment the reader
+    /// reached the bottom. `None` for an anonymous reader, who has no cursors.
+    pub fn room_cursors(&self) -> Option<ReadStateManager> {
+        let generation = self.0.generation.get();
+        if let Some(existing) = self.cached(generation, |shared| shared.room_cursors.clone()) {
+            return Some(existing);
+        }
+        // Built outside the borrow: `rooms()` takes it too.
+        let rooms = self.rooms()?;
+        let viewer = self.viewer_untracked()?;
+        let manager = ReadStateManager::try_new(self.context_untracked(), rooms, viewer)?;
+        let mut shared = self.0.shared.borrow_mut();
+        shared.reset_if_stale(generation);
+        Some(shared.room_cursors.get_or_insert(manager).clone())
+    }
+
+    /// The reader's per-conversation read cursors. `None` for an anonymous
+    /// reader; see [`Self::room_cursors`] for why there is exactly one.
+    pub fn dm_cursors(&self) -> Option<DmReadStateManager> {
+        let generation = self.0.generation.get();
+        if let Some(existing) = self.cached(generation, |shared| shared.dm_cursors.clone()) {
+            return Some(existing);
+        }
+        let threads = self.dm_threads()?;
+        let viewer = self.viewer_untracked()?;
+        let manager = DmReadStateManager::try_new(self.context_untracked(), threads, viewer)?;
+        let mut shared = self.0.shared.borrow_mut();
+        shared.reset_if_stale(generation);
+        Some(shared.dm_cursors.get_or_insert(manager).clone())
+    }
+
+    /// Read one already-built handle for this generation, if there is one.
+    fn cached<T>(&self, generation: u64, pick: impl Fn(&Shared) -> Option<T>) -> Option<T> {
+        let mut shared = self.0.shared.borrow_mut();
+        shared.reset_if_stale(generation);
+        pick(&shared)
+    }
+
+    /// Build one of the shared queries and register it under `label`, so a
+    /// host's attached observer sees the whole inventory. A failure is logged
+    /// and becomes `None` rather than a panic: a surface degrades better than
+    /// a page disappears.
+    fn build_query<R>(&self, predicate: &str, label: &str) -> Option<(LiveQuery<R>, QueryRegistration)>
+    where R: View + Clone + Send + Sync + 'static {
+        match self.context_untracked().query::<R>(predicate) {
+            Ok(query) => {
+                let registration = query_registry::register(label, &query);
+                Some((query, registration))
+            }
+            Err(e) => {
+                tracing::error!("Failed to create the shared {} LiveQuery: {:?}", label, e);
+                None
+            }
+        }
+    }
 
     /// The ankurah context to read and write through. Reading this in an
     /// `Effect` or a `Memo` is what makes a query re-point when the host
@@ -328,6 +451,16 @@ impl ChatContextBuilder {
         self
     }
 
+    /// Which rooms this deployment offers, as an AnkQL predicate over `Room`.
+    /// Defaults to all of them. This is the configurable room set, expressed
+    /// as data rather than as a query object — a page showing one room passes
+    /// `"name = 'general'"`. It scopes the room selector and the unread
+    /// windows together, which is why it is declared once here.
+    pub fn rooms_where(mut self, predicate: impl Into<String>) -> Self {
+        self.rooms_where = predicate.into();
+        self
+    }
+
     /// Whether the transport is up. Read reactively; defaults to always up,
     /// which is right for a host that has no connection state to report.
     pub fn online(mut self, online: impl Fn() -> bool + 'static) -> Self {
@@ -359,6 +492,8 @@ impl ChatContextBuilder {
         ChatContext(SendWrapper::new(Arc::new(Inner {
             session: ArcRwSignal::new(SendWrapper::new(self.session)),
             generation: ArcRwSignal::new(0),
+            rooms_where: self.rooms_where,
+            shared: RefCell::new(Shared::default()),
             online: self.online.unwrap_or_else(|| Box::new(|| true)),
             can_moderate: self.can_moderate.unwrap_or_else(|| Box::new(|| false)),
             demand_auth: self.demand_auth,

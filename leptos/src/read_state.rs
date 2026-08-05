@@ -98,15 +98,20 @@ struct RoomWindow {
 }
 
 impl ReadStateManager {
-    /// `context` and `user_id` are the host's: this manager's rows are scoped
-    /// to one reader, so a host that signs a different reader in builds a new
-    /// one rather than re-pointing this.
-    pub fn new(context: Context, rooms: LiveQuery<RoomView>, user_id: EntityId) -> Self {
-        let read_states = context
-            .query::<ReadStateView>(
-                queries::selection("user = ?", [(&user_id).into()]).expect("static readstate selection parses"),
-            )
-            .expect("failed to create ReadStateView LiveQuery");
+    /// Built by the handshake, once per session, from that session's context
+    /// and reader — these rows belong to one reader, so a different reader
+    /// means a different manager rather than a re-pointed one. `None` if the
+    /// cursor query cannot be created, which is logged: a rail without badges
+    /// is better than a page that will not render.
+    pub(crate) fn try_new(context: Context, rooms: LiveQuery<RoomView>, user_id: EntityId) -> Option<Self> {
+        let selection = queries::selection("user = ?", [(&user_id).into()]).expect("static readstate selection parses");
+        let read_states = match context.query::<ReadStateView>(selection) {
+            Ok(query) => query,
+            Err(e) => {
+                tracing::error!("Failed to create the room read-cursor LiveQuery: {:?}", e);
+                return None;
+            }
+        };
 
         let inner = Arc::new(Inner {
             context,
@@ -153,7 +158,7 @@ impl ReadStateManager {
         });
         *inner._rooms_guard.lock().unwrap() = Some(rooms_guard);
 
-        Self(SendWrapper::new(inner))
+        Some(Self(SendWrapper::new(inner)))
     }
 
     /// Reactive unread count for one room's badge. Zero until the user's own

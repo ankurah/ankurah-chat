@@ -180,15 +180,17 @@ struct ThreadWindow {
 }
 
 impl DmReadStateManager {
-    /// `context` and `user_id` are the host's, as with room cursors: these
-    /// rows belong to one reader, so a host that signs a different reader in
-    /// builds a new manager.
-    pub fn new(context: Context, threads: LiveQuery<DmThreadView>, user_id: EntityId) -> Self {
-        let cursors = context
-            .query::<DmReadStateView>(
-                queries::selection("user = ?", [(&user_id).into()]).expect("static dmreadstate selection parses"),
-            )
-            .expect("failed to create DmReadStateView LiveQuery");
+    /// Built by the handshake, once per session — see [`crate::read_state`],
+    /// which sets out why these belong to one reader and what `None` means.
+    pub(crate) fn try_new(context: Context, threads: LiveQuery<DmThreadView>, user_id: EntityId) -> Option<Self> {
+        let selection = queries::selection("user = ?", [(&user_id).into()]).expect("static dmreadstate selection parses");
+        let cursors = match context.query::<DmReadStateView>(selection) {
+            Ok(query) => query,
+            Err(e) => {
+                tracing::error!("Failed to create the conversation read-cursor LiveQuery: {:?}", e);
+                return None;
+            }
+        };
 
         let inner = Arc::new(Inner {
             context,
@@ -246,7 +248,7 @@ impl DmReadStateManager {
             Self::add_window(&inner, thread.id());
         }
 
-        Self(SendWrapper::new(inner))
+        Some(Self(SendWrapper::new(inner)))
     }
 
     /// Reactive unread count for one thread's badge. Zero until the viewer's

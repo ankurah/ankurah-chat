@@ -4,13 +4,11 @@ use std::collections::HashMap;
 use web_sys::KeyboardEvent;
 
 use ankurah_chat_model::mention_display::MemberDirectory;
-use ankurah_chat_model::{DmThreadView, Message, MessageView, RoomView, UserView};
+use ankurah::EntityId;
+use ankurah_chat_model::{Message, MessageView, UserView};
 use ankurah_signals::{Get as AnkurahGet, Peek as AnkurahPeek};
-use send_wrapper::SendWrapper;
-
 use crate::context::chat;
 use crate::fmt;
-use crate::query_registry::{self, QueryRegistration};
 
 /// Where a composed message goes. Everything ABOVE the send — autosize, the
 /// mention popup and its `@Name` re-encoding, `:emoji:` completion, the IME
@@ -21,10 +19,15 @@ use crate::query_registry::{self, QueryRegistration};
 /// `editing_message`/`replying_to`, which are `MessageView`-typed and which the
 /// DM thread view never arms. A DM composer therefore renders no chips, and
 /// Cmd/Ctrl+Up navigates nothing (the DM view passes an empty message list).
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum ComposerTarget {
-    Room(RoomView),
-    Dm(DmThreadView),
+    /// A room, by id.
+    Room(EntityId),
+    /// A private conversation, by the OTHER participant's id. A conversation
+    /// is keyed on its pair, not on the row that happens to represent it — see
+    /// [`crate::dm`] on why a pair can end up with two rows — so the composer
+    /// resolves the row to write into at send time.
+    Dm { partner: EntityId },
 }
 
 /// Cap on the auto-grown composer height — roughly eight lines of text;
@@ -244,65 +247,28 @@ pub fn Composer(
         move || !message_input.get().trim().is_empty() && is_connected()
     };
 
-    // Mention autocomplete: a composer-local users LiveQuery plus the draft
-    // being typed. Candidates derive from both, so the popup tracks the users
-    // collection live. Held in a signal and built in an effect for the same
-    // reason the message list's reactions query is — a host swapping the
-    // session must not cost the reader their draft.
-    // The registration guard lives beside the query rather than inside it:
-    // assigning a new one drops the old, which is what tells an attached
-    // observer the previous query is gone.
-    let mention_registration = StoredValue::new(None::<QueryRegistration>);
-    let build_users = {
+    // Mention autocomplete draws on the handshake's members query — the same
+    // rows the timeline names authors from, so a rename shows up in both at
+    // once, and one subscription rather than one per composer.
+    let members_now = {
         let chat = chat.clone();
-        move || match chat.context_untracked().query::<UserView>("true") {
-            Ok(query) => {
-                mention_registration.set_value(Some(query_registry::register("users (composer)", &query)));
-                Some(SendWrapper::new(query))
-            }
-            Err(e) => {
-                // Logged rather than fatal: a composer without mention
-                // autocomplete still sends messages.
-                tracing::error!("Failed to create the composer's users LiveQuery: {:?}", e);
-                mention_registration.set_value(None);
-                None
-            }
+        move || {
+            chat.members()
+                .map(|q| q.peek().iter().map(|u| (u.id().to_base64(), u.display_name().unwrap_or_default())).collect::<Vec<_>>())
+                .unwrap_or_default()
         }
-    };
-    // Built synchronously so the first keystroke can already complete a
-    // mention, and again whenever the session moves. Generations rather than a
-    // first-run skip, for the reason message_list.rs sets out: the effect runs
-    // deferred, and a skip would swallow a swap that happened in between.
-    let mention_users = RwSignal::new(build_users());
-    let users_built_for = StoredValue::new(chat.generation_untracked());
-    Effect::new({
-        let chat = chat.clone();
-        let build_users = build_users.clone();
-        move |_| {
-            let generation = chat.generation(); // tracked: the swap signal
-            if generation == users_built_for.get_value() {
-                return;
-            }
-            users_built_for.set_value(generation);
-            mention_users.set(build_users());
-        }
-    });
-    // The member list as of now, without subscribing — what the send and
-    // edit-mirror moments want.
-    let members_now = move || {
-        mention_users
-            .get_untracked()
-            .map(|q| q.peek().iter().map(|u| (u.id().to_base64(), u.display_name().unwrap_or_default())).collect::<Vec<_>>())
-            .unwrap_or_default()
     };
     let mention_draft = RwSignal::new(None::<MentionDraft>);
     let mention_selected = RwSignal::new(0usize);
-    let mention_matches = Signal::derive(move || match mention_draft.get() {
-        Some(draft) => match mention_users.get() {
-            Some(query) => mention_candidates(&query.get(), &draft.query),
+    let mention_matches = Signal::derive({
+        let chat = chat.clone();
+        move || match mention_draft.get() {
+            Some(draft) => match chat.members() {
+                Some(members) => mention_candidates(&members.get(), &draft.query),
+                None => Vec::new(),
+            },
             None => Vec::new(),
-        },
-        None => Vec::new(),
+        }
     });
 
     // Emoji autocomplete: the same draft/selection/matches trio as
@@ -323,24 +289,29 @@ pub fn Composer(
     // The member list as a coding directory. Untracked on purpose: a send or
     // an edit-mirror wants the list as of NOW, and must not re-run when
     // someone joins or renames.
-    let directory = move || MemberDirectory::new(members_now());
+    let directory = {
+        let members_now = members_now.clone();
+        move || MemberDirectory::new(members_now())
+    };
 
     // id → display-name map for the reply chip: the author line, and token
     // resolution inside the snippet. Rebuilt live — renames included — from
     // the same users query the mention popup holds.
-    let member_names = Memo::new(move |_| {
-        mention_users
-            .get()
-            .map(|q| {
-                q.get()
-                    .iter()
-                    .filter_map(|u| {
-                        let name = u.display_name().unwrap_or_default();
-                        (!name.is_empty()).then(|| (u.id().to_base64(), name))
-                    })
-                    .collect::<HashMap<String, String>>()
-            })
-            .unwrap_or_default()
+    let member_names = Memo::new({
+        let chat = chat.clone();
+        move |_| {
+            chat.members()
+                .map(|q| {
+                    q.get()
+                        .iter()
+                        .filter_map(|u| {
+                            let name = u.display_name().unwrap_or_default();
+                            (!name.is_empty()).then(|| (u.id().to_base64(), name))
+                        })
+                        .collect::<HashMap<String, String>>()
+                })
+                .unwrap_or_default()
+        }
     });
 
     // Re-derive both drafts from the caret. Cheap; called on input and on
@@ -463,7 +434,9 @@ pub fn Composer(
     // disarms a pending reply: send() would EDIT, not create, so a
     // lingering chip would promise a `re` that never attaches. The reverse
     // (Reply canceling an edit) is handled at the Reply action itself.
-    Effect::new(move |prev: Option<Option<String>>| {
+    Effect::new({
+        let members_now = members_now.clone();
+        move |prev: Option<Option<String>>| {
         let editing = editing_message.get();
         let editing_id = editing.as_ref().map(|m| m.id().to_base64());
         if prev.map(|p| p != editing_id).unwrap_or(true) {
@@ -491,6 +464,7 @@ pub fn Composer(
             }
         }
         editing_id
+        }
     });
 
     // Arming a reply focuses the composer — the chip itself is chrome,
@@ -611,11 +585,11 @@ pub fn Composer(
                 wasm_bindgen_futures::spawn_local(async move {
                     let result = async {
                         match &target {
-                            ComposerTarget::Room(room) => {
+                            ComposerTarget::Room(room_id) => {
                                 let trx = session.context.begin();
                                 trx.create(&Message {
                                     user: session.viewer.into(),
-                                    room: ankurah::Ref::from(room),
+                                    room: (*room_id).into(),
                                     text: wire_text,
                                     timestamp: js_sys::Date::now() as i64,
                                     deleted: false,
@@ -626,7 +600,7 @@ pub fn Composer(
                                 .await?;
                                 trx.commit().await?;
                             }
-                            ComposerTarget::Dm(thread) => crate::dm::send_dm(&session, thread, wire_text).await?,
+                            ComposerTarget::Dm { partner } => crate::dm::send_dm(&session, *partner, wire_text).await?,
                         }
                         Ok::<_, Box<dyn std::error::Error>>(())
                     }

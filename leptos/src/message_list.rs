@@ -2,14 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use leptos::prelude::*;
 
-use ankurah::LiveQuery;
-use ankurah_chat_model::{MessageView, ReactionView, UserView};
+use ankurah_chat_model::MessageView;
 use ankurah_signals::Get as AnkurahGet;
-use send_wrapper::SendWrapper;
 
-use crate::context::{chat, Live};
+use crate::context::chat;
 use crate::message_row::MessageRow;
-use crate::query_registry::{self, QueryRegistration};
 use crate::reactions::{picker_index, ReactionChip};
 
 /// One renderable row: a message plus its computed grouping context. The
@@ -49,7 +46,6 @@ fn group_rows(msgs: &[MessageView], viewer: Option<String>) -> Vec<RowCtx> {
 #[component]
 pub fn MessageList(
     #[prop(into)] messages: Signal<Vec<MessageView>>,
-    #[prop(into)] users: Live<LiveQuery<UserView>>,
     editing_message: RwSignal<Option<MessageView>>,
     /// The composer's reply state, armed from the rows' context menus.
     replying_to: RwSignal<Option<MessageView>>,
@@ -72,11 +68,11 @@ pub fn MessageList(
     // tracked) changes. Rows' text closures read it through `.with`, so a
     // rename re-renders mentions live without per-row user lookups.
     let mention_names = Memo::new({
-        let users = users.clone();
+        let chat = chat.clone();
         move |_| {
-            users
-                .current()
-                .get()
+            chat.members()
+                .map(|q| q.get())
+                .unwrap_or_default()
                 .iter()
                 .filter_map(|u| {
                     let name = u.display_name().unwrap_or_default();
@@ -86,62 +82,16 @@ pub fn MessageList(
         }
     });
 
-    // Reactions: one standing LiveQuery over active reactions, grouped into
-    // render-ready chips per message id. `Reaction` has no room ref, so a
-    // room-scoped predicate is inexpressible; per-row queries would churn
-    // subscriptions with every virtual-scroll mount and unmount. See
-    // reactions.rs.
-    //
-    // Built in an effect rather than in the body, and held in a signal, so a
-    // host that swaps the session — a reader signing in mid-visit — gets the
-    // query rebuilt against the new context without this list remounting. The
-    // registration guard rides in the same signal: dropping it is what tells
-    // an attached observer the old query is gone.
-    let reactions_registration = StoredValue::new(None::<QueryRegistration>);
-    let build = {
+    // Render-ready chips per message id, from the handshake's one standing
+    // reactions query.
+    let reaction_chips = Memo::new({
         let chat = chat.clone();
-        move || match chat.context_untracked().query::<ReactionView>("active = true") {
-            Ok(query) => {
-                reactions_registration.set_value(Some(query_registry::register("reactions (message list)", &query)));
-                Some(SendWrapper::new(query))
-            }
-            Err(e) => {
-                // Logged rather than fatal: a timeline without reaction chips
-                // is a timeline, and a panic here would take the whole page.
-                tracing::error!("Failed to create the reactions LiveQuery: {:?}", e);
-                reactions_registration.set_value(None);
-                None
-            }
-        }
-    };
-    // Built synchronously so the FIRST frame already has the query — chips
-    // that arrive a frame late are a visible pop — and again whenever the
-    // session moves.
-    //
-    // The effect compares generations rather than skipping its first run. A
-    // first-run skip is wrong: the effect runs deferred, so if the host swapped
-    // the session between this build and that run, the skip would swallow the
-    // swap and leave the query pointed at a context nobody is using any more.
-    let reactions = RwSignal::new(build());
-    let built_for = StoredValue::new(chat.generation_untracked());
-    Effect::new({
-        let chat = chat.clone();
-        let build = build.clone();
         move |_| {
-            let generation = chat.generation(); // tracked: the swap signal
-            if generation == built_for.get_value() {
-                return;
-            }
-            built_for.set_value(generation);
-            reactions.set(build());
-        }
-    });
-    let reaction_chips = Memo::new(move |_| {
         let viewer_id = viewer.get();
         // Distinct users per (message, emoji): duplicate rows (possible under
         // concurrent first-toggles) count once.
         let mut sets: HashMap<String, HashMap<String, HashSet<String>>> = HashMap::new();
-        let rows = reactions.get().map(|q| q.get()).unwrap_or_default();
+        let rows = chat.reactions().map(|q| q.get()).unwrap_or_default();
         for row in rows.iter() {
             if !row.active().unwrap_or(false) {
                 continue;
@@ -169,6 +119,7 @@ pub fn MessageList(
                 (message_id, chips)
             })
             .collect::<HashMap<String, Vec<ReactionChip>>>()
+        }
     });
 
     view! {
@@ -207,13 +158,11 @@ pub fn MessageList(
                     )
                 }
                 children={
-                    let users = users.clone();
                     move |row: RowCtx| {
                         let viewer = row.viewer.clone();
                         view! {
                             <MessageRow
                                 message=row.message
-                                users=users.clone()
                                 current_user_id=viewer
                                 editing_message=editing_message
                                 replying_to=replying_to
