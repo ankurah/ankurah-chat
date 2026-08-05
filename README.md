@@ -20,9 +20,11 @@ that want to put live chat surfaces in their own pages.
 ## Crates
 
 - `ankurah-chat-model` — the chat collections (Message, Room, User, Reaction,
-  ReadState, and the DM trio DmThread/DmMessage/DmReadState) and the
-  mention/URL scanner. This is the ONE definition each of them: a chat server
-  and its clients both link this crate, so neither can drift from the other.
+  ReadState, and the DM trio DmThread/DmMessage/DmReadState), the mention/URL
+  scanner, and the `mention_display` codec that lets a composer show
+  `@DisplayName` over the stored token. This is the ONE definition each of
+  them: a chat server and its clients both link this crate, so neither can
+  drift from the other.
   **Interop constraint:** ankurah derives a collection's identifier from the
   struct name and a property's from the field name, so those names are wire
   and are pinned by live data — a rename is a migration, never a refactor.
