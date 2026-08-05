@@ -177,14 +177,24 @@
   font-size: 16px;
   line-height: 1.5;
   font-weight: 400;
-  color: var(--akchat-text);
-  /* A chat surface in a narrow column still has to hold a message. Below this
-     the composer and the room rail stop being usable, so a host that squeezes
-     harder gets a scrollbar rather than a broken layout. */
-  min-width: 320px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* NO `color` AND NO `min-width` HERE, deliberately.
+ *
+ * A component root is often a flex child of something the host laid out — the
+ * room rail is 260px wide in community — and a minimum width on it would
+ * overflow that column rather than protect anything. The surfaces are BUILT to
+ * work down to about 320px: every flex child carries `min-width: 0`, the rail
+ * collapses to a chip strip under 768px, and the composer grows in place. A
+ * host that gives them less than that gets clipped text, which is its own
+ * layout's business to fix.
+ *
+ * Colour is set where a background is (the message log, the bubbles, the rail
+ * rows), so a root that is only a container keeps whatever the host's own
+ * chrome around it says. Forcing it here would repaint a rail the host had
+ * deliberately coloured. */
 
 :where(.ankurah-chat) button {
   font: inherit;

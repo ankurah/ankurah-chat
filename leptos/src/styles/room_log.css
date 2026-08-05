@@ -6,6 +6,10 @@
   flex-direction: column;
   overflow: hidden;
   background-color: var(--akchat-bg);
+  /* Paired with the background: a surface that paints its own canvas has to
+     say what colour text on it is, because the scoped reset deliberately
+     does not. */
+  color: var(--akchat-text);
   min-width: 0;
   min-height: 0;
   width: 100%;
