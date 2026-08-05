@@ -270,14 +270,16 @@ impl ChatContext {
     /// surface without it shows ids instead of names rather than failing.
     pub fn members(&self) -> Option<LiveQuery<UserView>> {
         let generation = self.0.generation.get();
-        {
-            let mut shared = self.0.shared.borrow_mut();
-            shared.reset_if_stale(generation);
-            if shared.members.is_none() {
-                shared.members = self.build_query("true", "members");
-            }
-            return shared.members.as_ref().map(|(query, _)| query.clone());
+        if let Some(existing) = self.cached(generation, |shared| shared.members.as_ref().map(|(query, _)| query.clone())) {
+            return Some(existing);
         }
+        // Built OUTSIDE the borrow: registering notifies whatever observer the
+        // host attached, and an observer that asked this handshake for a query
+        // would otherwise re-enter the cell.
+        let built = self.build_query("true", "members")?;
+        let mut shared = self.0.shared.borrow_mut();
+        shared.reset_if_stale(generation);
+        Some(shared.members.get_or_insert(built).0.clone())
     }
 
     /// Every active reaction, live.
@@ -289,25 +291,30 @@ impl ChatContext {
     /// change, and this does not have to.
     pub fn reactions(&self) -> Option<LiveQuery<ReactionView>> {
         let generation = self.0.generation.get();
+        if let Some(existing) = self.cached(generation, |shared| shared.reactions.as_ref().map(|(query, _)| query.clone())) {
+            return Some(existing);
+        }
+        // Built OUTSIDE the borrow: registering notifies whatever observer the
+        // host attached, and an observer that asked this handshake for a query
+        // would otherwise re-enter the cell.
+        let built = self.build_query("active = true", "reactions")?;
         let mut shared = self.0.shared.borrow_mut();
         shared.reset_if_stale(generation);
-        if shared.reactions.is_none() {
-            shared.reactions = self.build_query("active = true", "reactions");
-        }
-        shared.reactions.as_ref().map(|(query, _)| query.clone())
+        Some(shared.reactions.get_or_insert(built).0.clone())
     }
 
     /// The rooms this deployment offers, live — the set the host declared with
     /// [`ChatContextBuilder::rooms_where`], or all of them.
     pub fn rooms(&self) -> Option<LiveQuery<RoomView>> {
         let generation = self.0.generation.get();
+        if let Some(existing) = self.cached(generation, |shared| shared.rooms.as_ref().map(|(query, _)| query.clone())) {
+            return Some(existing);
+        }
+        let predicate = format!("{} ORDER BY name ASC", self.0.rooms_where);
+        let built = self.build_query(&predicate, "rooms")?;
         let mut shared = self.0.shared.borrow_mut();
         shared.reset_if_stale(generation);
-        if shared.rooms.is_none() {
-            let predicate = format!("{} ORDER BY name ASC", self.0.rooms_where);
-            shared.rooms = self.build_query(&predicate, "rooms");
-        }
-        shared.rooms.as_ref().map(|(query, _)| query.clone())
+        Some(shared.rooms.get_or_insert(built).0.clone())
     }
 
     /// The reader's own conversations, live.
@@ -319,12 +326,16 @@ impl ChatContext {
     /// server's policy.
     pub fn dm_threads(&self) -> Option<LiveQuery<DmThreadView>> {
         let generation = self.0.generation.get();
+        if let Some(existing) = self.cached(generation, |shared| shared.dm_threads.as_ref().map(|(query, _)| query.clone())) {
+            return Some(existing);
+        }
+        // Built OUTSIDE the borrow: registering notifies whatever observer the
+        // host attached, and an observer that asked this handshake for a query
+        // would otherwise re-enter the cell.
+        let built = self.build_query("deleted = false", "dm threads")?;
         let mut shared = self.0.shared.borrow_mut();
         shared.reset_if_stale(generation);
-        if shared.dm_threads.is_none() {
-            shared.dm_threads = self.build_query("deleted = false", "dm threads");
-        }
-        shared.dm_threads.as_ref().map(|(query, _)| query.clone())
+        Some(shared.dm_threads.get_or_insert(built).0.clone())
     }
 
     /// The reader's per-room read cursors, and the unread counts they drive.
