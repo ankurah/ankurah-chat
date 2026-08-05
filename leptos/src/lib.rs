@@ -70,7 +70,7 @@
 mod composer;
 pub mod context;
 mod debug_header;
-mod dm;
+pub mod dm;
 pub mod emoji;
 pub mod fmt;
 mod grouping;
