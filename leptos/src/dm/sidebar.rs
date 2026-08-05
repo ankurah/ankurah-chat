@@ -71,10 +71,10 @@ pub fn DmSidebar(
     let rows_for_empty = rows;
 
     view! {
-        <div class="sidebarHeader dmSectionHeader">
+        <div class="ankurah-chat sidebarHeader dmSectionHeader">
             <span class="sidebarTitle">"Direct messages"</span>
         </div>
-        <div class="roomList dmList">
+        <div class="ankurah-chat roomList dmList">
             <Show when=move || rows_for_empty.get().is_empty()>
                 <div class="emptyRooms">
                     "No conversations yet — open a member and choose Message."

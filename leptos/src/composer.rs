@@ -770,7 +770,7 @@ pub fn Composer(
 
     let send_click = send.clone();
     view! {
-        <div class="inputContainer">
+        <div class="ankurah-chat inputContainer">
             // Mention autocomplete popup: floats above the composer.
             // mousedown is prevented throughout so the textarea keeps focus
             // (its blur handler would otherwise close the popup pre-click).
