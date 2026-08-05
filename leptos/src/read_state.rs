@@ -35,13 +35,20 @@ use ankurah_chat_model::{MessageView, ReadState, ReadStateView, RoomView};
 use send_wrapper::SendWrapper;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::context::ctx_untracked;
+use ankurah::Context;
+
 use crate::queries;
 
 #[derive(Clone)]
 pub struct ReadStateManager(SendWrapper<Arc<Inner>>);
 
 struct Inner {
+    /// The ankurah context this manager reads and writes through, held rather
+    /// than looked up: its subscription callbacks fire from the reactor, with
+    /// no reactive owner to resolve the handshake through, and its flush loops
+    /// run in deferred futures. Held for the manager's life, which is why a
+    /// host that swaps the session builds a new manager.
+    context: Context,
     user_id: EntityId,
     /// The user's own ReadState rows, live.
     read_states: LiveQuery<ReadStateView>,
@@ -74,14 +81,18 @@ struct RoomWindow {
 }
 
 impl ReadStateManager {
-    pub fn new(rooms: LiveQuery<RoomView>, user_id: EntityId) -> Self {
-        let read_states = ctx_untracked()
+    /// `context` and `user_id` are the host's: this manager's rows are scoped
+    /// to one reader, so a host that signs a different reader in builds a new
+    /// one rather than re-pointing this.
+    pub fn new(context: Context, rooms: LiveQuery<RoomView>, user_id: EntityId) -> Self {
+        let read_states = context
             .query::<ReadStateView>(
                 queries::selection("user = ?", [(&user_id).into()]).expect("static readstate selection parses"),
             )
             .expect("failed to create ReadStateView LiveQuery");
 
         let inner = Arc::new(Inner {
+            context,
             user_id,
             read_states: read_states.clone(),
             last_read: Mut::new(HashMap::new()),
@@ -190,7 +201,7 @@ impl ReadStateManager {
             [(&room.id()).into()],
         )
         .expect("static unread window selection parses");
-        let query = match ctx_untracked().query::<MessageView>(selection) {
+        let query = match inner.context.query::<MessageView>(selection) {
             Ok(q) => q,
             Err(e) => {
                 tracing::error!("Failed to create unread window for room {}: {:?}", key, e);
@@ -281,13 +292,13 @@ impl ReadStateManager {
             None => {
                 let recorded = inner.row_ids.lock().unwrap().get(room_id).copied();
                 match recorded {
-                    Some(id) => ctx_untracked().get::<ReadStateView>(id).await.ok(),
+                    Some(id) => inner.context.get::<ReadStateView>(id).await.ok(),
                     None => None,
                 }
             }
         };
 
-        let trx = ctx_untracked().begin();
+        let trx = inner.context.begin();
         match existing {
             Some(row) => {
                 row.edit(&trx)?.last_read_ts().set(&ts)?;

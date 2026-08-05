@@ -7,7 +7,7 @@ use ankurah_chat_model::{MessageView, ReactionView, UserView};
 use ankurah_signals::Get as AnkurahGet;
 use send_wrapper::SendWrapper;
 
-use crate::context::ctx;
+use crate::context::chat;
 use crate::message_row::MessageRow;
 use crate::query_registry::{self, QueryRegistration};
 use crate::reactions::{picker_index, ReactionChip};
@@ -84,7 +84,7 @@ pub fn MessageList(
     // an attached observer the old query is gone.
     let reactions = RwSignal::new(None::<SendWrapper<LiveQuery<ReactionView>>>);
     let reactions_registration = StoredValue::new(None::<QueryRegistration>);
-    Effect::new(move |_| match ctx().query::<ReactionView>("active = true") {
+    Effect::new(move |_| match chat().context().query::<ReactionView>("active = true") {
         Ok(query) => {
             reactions_registration.set_value(Some(query_registry::register("reactions (message list)", &query)));
             reactions.set(Some(SendWrapper::new(query)));

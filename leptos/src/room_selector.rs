@@ -18,7 +18,7 @@ use ankurah::LiveQuery;
 use ankurah_chat_model::{Room, RoomView};
 use ankurah_signals::Get as AnkurahGet;
 
-use crate::context::{chat, ctx_untracked};
+use crate::context::chat;
 use crate::read_state::ReadStateManager;
 
 #[component]
@@ -42,8 +42,12 @@ pub fn RoomSelector(
     let is_creating = RwSignal::new(false);
     let rooms_for_empty = rooms.clone();
     // Making a room is a write, so the affordance is for a reader who is
-    // signed in. A read-only visitor sees the list without it.
-    let can_create = move || chat().viewer().is_some();
+    // signed in. Read TRACKED, so signing in mid-visit makes it appear.
+    let chat = chat();
+    let can_create = {
+        let chat = chat.clone();
+        move || chat.viewer().is_some()
+    };
 
     view! {
         <div class="ankurah-chat sidebarHeader">
@@ -156,6 +160,7 @@ fn RoomItem(
 #[component]
 fn NewRoomInput(selected_room: RwSignal<Option<RoomView>>, on_cancel: impl Fn() + Clone + 'static) -> impl IntoView {
     let room_name = RwSignal::new(String::new());
+    let chat = chat();
 
     let handle_key = {
         let on_cancel = on_cancel.clone();
@@ -166,18 +171,18 @@ fn NewRoomInput(selected_room: RwSignal<Option<RoomView>>, on_cancel: impl Fn() 
                 if name.is_empty() {
                     return;
                 }
-                let Some(me) = chat().viewer_untracked() else {
-                    chat().demand_auth();
-                    return;
-                };
+                // Resolved before the future defers, like every other write.
+                let Some(session) = chat.write_session() else { return };
                 let on_cancel = on_cancel.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     match (|| async {
-                        let transaction = ctx_untracked().begin();
+                        let transaction = session.context.begin();
                         // `created_by` is the caller: a typical room write
                         // scope rejects anything else.
-                        let room =
-                            transaction.create(&Room { name, created_by: Some(me.into()), topic: None }).await?.read();
+                        let room = transaction
+                            .create(&Room { name, created_by: Some(session.viewer.into()), topic: None })
+                            .await?
+                            .read();
                         transaction.commit().await?;
                         Ok::<_, Box<dyn std::error::Error>>(room)
                     })()

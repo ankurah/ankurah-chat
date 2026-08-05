@@ -47,7 +47,7 @@ use ankurah::{EntityId, View};
 use ankurah_signals::Get as AnkurahGet;
 use ankurah_virtual_scroll::{ScrollManager, ScrollMode};
 
-use crate::context::ctx;
+use crate::context::chat;
 
 /// ankurah-virtual-scroll tuning, shared by every timeline.
 const MIN_ROW_HEIGHT: u32 = 40;
@@ -117,13 +117,23 @@ impl<V: View + Clone + Send + Sync + 'static> ScrollPane<V> {
     /// event handlers and read-cursor decisions).
     pub fn is_live(&self) -> bool { self.manager.get_untracked().map(|m| m.mode() == ScrollMode::Live).unwrap_or(false) }
 
-    /// Point the pane at a new selection, or at nothing. Call from an `Effect`
-    /// that reads whatever selection signal the caller owns; a `None` predicate
-    /// tears the manager down (empty state).
+    /// Point the pane at a new selection, or at nothing. CALL FROM AN `Effect`
+    /// that reads whatever selection signal the caller owns — the handshake is
+    /// resolved here through the reactive owner chain, which an effect has and
+    /// a deferred future does not. A `None` predicate tears the manager down
+    /// (empty state).
     ///
-    /// The ankurah context is read TRACKED, so an effect that calls this also
-    /// re-runs when the host swaps the session — a reader who signs in keeps
-    /// their place in the timeline instead of remounting into a fresh one.
+    /// The ankurah context is read TRACKED, so the calling effect also re-runs
+    /// when the host swaps the session, and the timeline starts reading through
+    /// the context the reader now has.
+    ///
+    /// THIS BUILDS A NEW MANAGER EVERY TIME, including on a session swap.
+    /// `ScrollManager` takes its context as a constructor argument and
+    /// ankurah-virtual-scroll 0.9.0 exposes no way to re-point one, so the
+    /// loaded window, the anchor and the pagination flags do not cross over: a
+    /// reader who signs in while paged back through history is returned to the
+    /// live tail. Everything OUTSIDE the pane survives, because nothing
+    /// unmounts — see the [`crate::context`] module docs.
     pub fn set_source(&self, predicate: Option<Predicate>, display_order: &'static str) {
         let Some(predicate) = predicate else {
             self.manager.set(None);
@@ -138,7 +148,7 @@ impl<V: View + Clone + Send + Sync + 'static> ScrollPane<V> {
             .filter(|h| *h > 0)
             .unwrap_or(DEFAULT_VIEWPORT_HEIGHT);
 
-        match ScrollManager::<V>::new(&ctx(), predicate, display_order, MIN_ROW_HEIGHT, BUFFER_FACTOR, viewport_height) {
+        match ScrollManager::<V>::new(&chat().context(), predicate, display_order, MIN_ROW_HEIGHT, BUFFER_FACTOR, viewport_height) {
             Ok(m) => {
                 let m = Arc::new(m);
                 let m_start = m.clone();

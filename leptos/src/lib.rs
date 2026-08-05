@@ -14,11 +14,21 @@
 //!   live tail, with its composer;
 //! - [`Composer`] — the message box on its own, with mention and `:emoji:`
 //!   completion;
-//! - [`DmThread`] and [`DmSidebar`] — direct messages: the conversation, and
-//!   the list of conversations.
+//! - [`DmConversation`] and [`DmSidebar`] — direct messages: the conversation,
+//!   and the list of conversations.
 //!
 //! A page may mount any of them without the others: a single room log with no
 //! selector, or a DM panel with no rooms at all.
+//!
+//! # Writing
+//!
+//! Every write these components make — sending, editing, reacting, opening a
+//! conversation, creating a room, an author deleting their own message —
+//! resolves the reader and the ankurah context together, once, through
+//! [`ChatContext::write_session`], before it defers any work. No reader means
+//! no write and one call to the host's auth-demand callback. That is also why
+//! the handshake itself must be taken where a reactive owner exists; see the
+//! [`context`] module.
 //!
 //! # What a host provides
 //!
@@ -89,11 +99,13 @@ mod scroll_pane;
 mod styles;
 
 pub use composer::{Composer, ComposerTarget};
-pub use context::{ChatContext, ChatContextBuilder, ChatHooks, MessageSlot, ModeratorDelete, Session};
+pub use context::{
+    chat, ChatContext, ChatContextBuilder, ChatHooks, MenuActions, MessageSlot, ModeratorDelete, Session, WriteSession,
+};
 pub use debug_header::TimelineDebugHeader;
 pub use dm::{
     conversations, converge_selection, display_name, open_thread_with, pair_rows, partner_of, send_dm, threads_query,
-    Conversation, DmReadStateManager, DmSidebar, DmThread,
+    Conversation, DmConversation, DmReadStateManager, DmSidebar,
 };
 pub use message_list::MessageList;
 pub use message_row::MessageRow;

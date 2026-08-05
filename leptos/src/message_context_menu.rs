@@ -6,7 +6,7 @@ use web_sys::{KeyboardEvent, MouseEvent, window};
 
 use ankurah_chat_model::MessageView;
 
-use crate::context::{chat, ctx_untracked};
+use crate::context::chat;
 
 /// The message actions menu: react and reply for everyone, edit for the author
 /// (or for anyone, on a message its author has opened up), the author's
@@ -29,7 +29,10 @@ pub fn MessageContextMenu(
     // offered only where the host said what it means (see
     // `ChatHooks::moderator_delete`). Gating here is presentation: the server's
     // write policy is what actually decides.
-    let can_moderate_delete = !is_own && chat().can_moderate() && chat().hooks().moderator_delete.is_some();
+    // Taken once, here: the handlers below run with no reactive owner, and
+    // two of them defer into a future on top of that.
+    let chat = chat();
+    let can_moderate_delete = !is_own && chat.can_moderate() && chat.hooks().moderator_delete.is_some();
     let can_delete = is_own || can_moderate_delete;
     // Whether the author has opened this message up for anyone to edit. The
     // menu mounts fresh on every open, so a non-reactive read is correct.
@@ -214,13 +217,17 @@ pub fn MessageContextMenu(
     let handle_toggle_collab = {
         let on_close = on_close.clone();
         let message = message.clone();
+        let chat = chat.clone();
         move |_: LeptosMouseEvent| {
+            // A write like any other: it needs an author and a context, taken
+            // together and before the future below defers.
+            let Some(session) = chat.write_session() else { return };
             let message = message.clone();
             let on_close = on_close.clone();
             let make_collaborative = !is_collaborative;
             wasm_bindgen_futures::spawn_local(async move {
                 match (|| async {
-                    let trx = ctx_untracked().begin();
+                    let trx = session.context.begin();
                     message.edit(&trx)?.collaborative().set(&Some(make_collaborative))?;
                     trx.commit().await?;
                     Ok::<_, Box<dyn std::error::Error>>(())
@@ -239,6 +246,9 @@ pub fn MessageContextMenu(
     // consumes the originals).
     let message_for_react = message.clone();
     let on_close_for_react = on_close.clone();
+    let chat_for_react = chat.clone();
+    let message_for_menu = message.clone();
+    let on_close_for_extras = on_close.clone();
 
     // Deleting an author's own message: tombstone the row and clear its text.
     // The row stays so the timeline keeps its shape; the words do not, because
@@ -248,7 +258,9 @@ pub fn MessageContextMenu(
     // way to close this menu — a deployment may want a confirmation, a public
     // log row written in the same transaction, or a different check than the
     // one that put the item on screen.
-    let handle_delete = move |_: LeptosMouseEvent| {
+    let handle_delete = {
+        let chat = chat.clone();
+        move |_: LeptosMouseEvent| {
         let message = message.clone();
         let on_close = on_close.clone();
 
@@ -257,15 +269,16 @@ pub fn MessageContextMenu(
                 let on_close = on_close.clone();
                 move || on_close()
             });
-            if let Some(delete) = chat().hooks().moderator_delete.as_ref() {
+            if let Some(delete) = chat.hooks().moderator_delete.as_ref() {
                 delete(message, close);
             }
             return;
         }
 
+        let Some(session) = chat.write_session() else { return };
         wasm_bindgen_futures::spawn_local(async move {
             match (|| async {
-                let trx = ctx_untracked().begin();
+                let trx = session.context.begin();
                 let mutable = message.edit(&trx)?;
                 mutable.deleted().set(&true)?;
                 mutable.text().replace("")?;
@@ -279,6 +292,7 @@ pub fn MessageContextMenu(
             }
             on_close();
         });
+        }
     };
 
     view! {
@@ -300,13 +314,14 @@ pub fn MessageContextMenu(
                     .map(|emoji| {
                         let on_close = on_close_for_react.clone();
                         let message = message_for_react.clone();
+                        let chat = chat_for_react.clone();
                         view! {
                             <button
                                 class="contextMenuEmoji"
                                 role="menuitem"
                                 aria-label=format!("React with {}", emoji)
                                 on:click=move |_| {
-                                    crate::reactions::toggle_reaction(&message, emoji);
+                                    crate::reactions::toggle_reaction(&chat, &message, emoji);
                                     on_close();
                                 }
                             >
@@ -379,6 +394,17 @@ pub fn MessageContextMenu(
                         </button>
                     }
                 })}
+            // Whatever the host puts on a message. Last, after the actions the
+            // components own, and inside the same menu so the arrow keys reach
+            // it — which is the whole point of the slot (see `MenuActions`).
+            {
+                let message = message_for_menu.clone();
+                let on_close = on_close_for_extras.clone();
+                chat.hooks().menu_actions.as_ref().map(move |render| {
+                    let close: Box<dyn Fn()> = Box::new(move || on_close());
+                    render(message, close)
+                })
+            }
         </div>
     }
 }

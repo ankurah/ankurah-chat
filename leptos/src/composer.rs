@@ -9,7 +9,7 @@ use ankurah_chat_model::{DmThreadView, Message, MessageView, RoomView, UserView}
 use ankurah_signals::{Get as AnkurahGet, Peek as AnkurahPeek};
 use send_wrapper::SendWrapper;
 
-use crate::context::{chat, ctx_untracked};
+use crate::context::chat;
 use crate::fmt;
 use crate::query_registry::{self, QueryRegistration};
 
@@ -216,10 +216,6 @@ fn mention_candidates(users: &[UserView], query: &str) -> Vec<UserView> {
 pub fn Composer(
     /// The room or DM thread this composer posts into.
     target: ComposerTarget,
-    /// The reader, as a `User` row. A signal rather than a value: someone
-    /// signing in mid-visit should find their draft still here.
-    #[prop(into)]
-    current_user: Signal<Option<UserView>>,
     editing_message: RwSignal<Option<MessageView>>,
     /// The message the next send replies to, armed by the actions menu's
     /// Reply. Independent of the draft text: arming, cancelling, or sending a
@@ -232,10 +228,22 @@ pub fn Composer(
     let message_input = RwSignal::new(String::new());
     let textarea_ref = NodeRef::<Textarea>::new();
 
+    // Taken once, in the body. Everything below that runs later — the keydown
+    // handler, the send, the effects — uses this clone: the handshake resolves
+    // through the reactive owner chain, and neither a DOM event nor a deferred
+    // future has one.
+    let chat = chat();
+
     // Whether the host says the transport is up. A host with nothing to report
     // says nothing and the composer stays enabled.
-    let is_connected = move || chat().online();
-    let can_send = move || !message_input.get().trim().is_empty() && is_connected();
+    let is_connected = {
+        let chat = chat.clone();
+        move || chat.online()
+    };
+    let can_send = {
+        let is_connected = is_connected.clone();
+        move || !message_input.get().trim().is_empty() && is_connected()
+    };
 
     // Mention autocomplete: a composer-local users LiveQuery plus the draft
     // being typed. Candidates derive from both, so the popup tracks the users
@@ -247,7 +255,9 @@ pub fn Composer(
     // assigning a new one drops the old, which is what tells an attached
     // observer the previous query is gone.
     let mention_registration = StoredValue::new(None::<QueryRegistration>);
-    Effect::new(move |_| match crate::context::ctx().query::<UserView>("true") {
+    Effect::new({
+        let chat = chat.clone();
+        move |_| match chat.context().query::<UserView>("true") {
         Ok(query) => {
             mention_registration.set_value(Some(query_registry::register("users (composer)", &query)));
             mention_users.set(Some(SendWrapper::new(query)));
@@ -256,6 +266,7 @@ pub fn Composer(
             tracing::error!("Failed to create the composer's users LiveQuery: {:?}", e);
             mention_registration.set_value(None);
             mention_users.set(None);
+        }
         }
     });
     // The member list as of now, without subscribing — what the send and
@@ -487,6 +498,7 @@ pub fn Composer(
 
     let send = {
         let target = target.clone();
+        let chat = chat.clone();
         move || {
             mention_draft.set(None);
             emoji_draft.set(None);
@@ -494,13 +506,11 @@ pub fn Composer(
             if input_text.trim().is_empty() {
                 return;
             }
-            // A message needs an author. Nobody signed in means the host is
-            // asked to sign someone in — and the draft is left exactly where
-            // it is, so it is still there afterwards.
-            let Some(user) = current_user.get_untracked() else {
-                chat().demand_auth();
-                return;
-            };
+            // Author and context, resolved together and before anything is
+            // deferred. Nobody signed in means the host has been asked to fix
+            // that, and the draft is left exactly where it is — it is still
+            // there afterwards.
+            let Some(session) = chat.write_session() else { return };
 
             if let Some(edit_msg) = editing_message.get() {
                 // Edit existing message via a CRDT text replace. The editor
@@ -536,7 +546,7 @@ pub fn Composer(
                         if wire_text == stored {
                             return Ok(()); // byte-identical outcome (e.g. a re-typed mention)
                         }
-                        let trx = ctx_untracked().begin();
+                        let trx = session.context.begin();
                         let mutable = edit_msg.edit(&trx)?;
                         mutable.text().replace(&wire_text)?;
                         // Stamp the edit for the "(edited)" indicator.
@@ -560,7 +570,6 @@ pub fn Composer(
                 // tokens — the same bytes for a room and for a DM. What a
                 // server does with a mention in each is the server's affair.
                 let target = target.clone();
-                let user = user.clone();
                 let input_text = input_text.trim().to_string();
                 let wire_text = directory().encode(&input_text, &mention_picks.get_value());
                 let reply_to = replying_to.get_untracked();
@@ -573,9 +582,9 @@ pub fn Composer(
                     let result = async {
                         match &target {
                             ComposerTarget::Room(room) => {
-                                let trx = ctx_untracked().begin();
+                                let trx = session.context.begin();
                                 trx.create(&Message {
-                                    user: ankurah::Ref::from(&user),
+                                    user: session.viewer.into(),
                                     room: ankurah::Ref::from(room),
                                     text: wire_text,
                                     timestamp: js_sys::Date::now() as i64,
@@ -587,7 +596,7 @@ pub fn Composer(
                                 .await?;
                                 trx.commit().await?;
                             }
-                            ComposerTarget::Dm(thread) => crate::dm::send_dm(thread, &user, wire_text).await?,
+                            ComposerTarget::Dm(thread) => crate::dm::send_dm(&session, thread, wire_text).await?,
                         }
                         Ok::<_, Box<dyn std::error::Error>>(())
                     }
@@ -618,9 +627,9 @@ pub fn Composer(
 
     // Select the previous/next message the reader wrote, for editing.
     let navigate_own = {
+        let chat = chat.clone();
         move |backward: bool| {
-            let Some(user) = current_user.get_untracked() else { return };
-            let user_id = user.id().to_base64();
+            let Some(user_id) = chat.viewer_untracked().map(|id| id.to_base64()) else { return };
             let msgs = messages.get_untracked();
             if msgs.is_empty() {
                 return;

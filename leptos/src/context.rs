@@ -20,13 +20,38 @@
 //! an anonymous context — the components render, the timeline fills, the
 //! composer refuses to send and calls the host's auth-demand callback instead
 //! — and then, once the reader signs in, call [`ChatContext::set_session`]
-//! with the authenticated context. The components re-point their queries where
-//! they stand: the scroll position, the draft text, the open thread and the
-//! armed reply all survive, because nothing unmounted.
+//! with the authenticated context. Nothing unmounts, so the composer's draft,
+//! the armed reply, the selected room, the open conversation, the message
+//! being edited and any popover the host is showing all stay exactly as they
+//! were, and the components rebuild their queries against the new context
+//! where they stand.
 //!
-//! Read-cursor managers are the exception, and deliberately so: they are
-//! constructed by the host (they need the reader's own id to scope their rows)
-//! and a host that upgrades a session builds a new one.
+//! WHAT DOES NOT SURVIVE, stated plainly: the timeline's loaded window. A
+//! `ScrollManager` takes its context as a constructor argument and
+//! ankurah-virtual-scroll 0.9.0 offers no way to re-point one, so the pane
+//! builds a fresh manager and the reader lands at the live tail rather than
+//! wherever they had paged back to. A reader who signs in while scrolled
+//! through history loses their place in it. Closing that needs the scroller to
+//! accept a new context, or an anchor-restoring jump API to page back to where
+//! they were.
+//!
+//! Two more things a host owns rather than inherits:
+//!
+//! - read-cursor managers, which are constructed with the reader's id to scope
+//!   their rows, so a host that upgrades a session builds new ones;
+//! - any LiveQuery the host built and passed in (the rooms list, the users
+//!   list, the DM thread set) — those are the host's, and it rebuilds them.
+//!
+//! # Reaching the handshake
+//!
+//! [`chat`] resolves through Leptos context, which walks the reactive owner
+//! chain — so it answers inside a component body, a `Memo` or an `Effect`, and
+//! NOT inside a `spawn_local` future (whose first poll is a microtask, by
+//! which time the body has returned) or an ankurah subscription callback
+//! (which never had an owner at all). Take the handle once where an owner
+//! exists and move a clone into whatever defers. Everything that writes should
+//! take a [`WriteSession`] instead, which resolves the reader and the context
+//! together and is the one place the auth demand is raised.
 
 use std::sync::Arc;
 
@@ -48,6 +73,20 @@ pub struct Session {
 /// A place for a host to render something of its own, given the message the
 /// component is rendering.
 pub type MessageSlot = Box<dyn Fn(MessageView) -> AnyView>;
+
+/// Extra entries at the foot of a message's actions menu.
+///
+/// What it is for: keeping a host's own per-message tooling REACHABLE FROM THE
+/// KEYBOARD. The menu is the only focusable route to anything a message row
+/// offers — bubbles are not tab stops — so an affordance a host installs by
+/// listening for clicks (an inspector over `data-entity-id`, say) is a
+/// mouse-only affordance until it also appears here.
+///
+/// Given the message and a callback that closes the menu. Return an empty view
+/// to add nothing. The entries a host renders should carry `role="menuitem"`
+/// and the `contextMenuItem` class, so the menu's arrow-key cycling and its
+/// styling pick them up.
+pub type MenuActions = Box<dyn Fn(MessageView, Box<dyn Fn()>) -> AnyView>;
 
 /// Deleting someone else's message.
 ///
@@ -87,6 +126,28 @@ pub struct ChatHooks {
     /// A reader clicked an `@mention` chip. A host with a member profile
     /// surface opens it here.
     pub member_detail: Option<Box<dyn Fn(EntityId)>>,
+    /// See [`MenuActions`].
+    pub menu_actions: Option<MenuActions>,
+}
+
+/// Who is writing, and what through — resolved together, at one instant.
+///
+/// Two things are true of every write in these components: it needs an author,
+/// and it needs a context that will still be the right one when the write
+/// lands. Taking them apart invites both failures — a handler that checks the
+/// reader, awaits, and then reads a context the host has swapped underneath
+/// it, and a handler that resolves the context inside a future where the
+/// handshake is no longer reachable at all.
+///
+/// So every write path calls [`ChatContext::write_session`] BEFORE it defers,
+/// and carries this into the future it spawns. No reader means no session and
+/// no write: the auth demand has already been raised by the time `None` comes
+/// back.
+pub struct WriteSession {
+    pub context: Context,
+    /// The reader's own `User` entity id — the author of whatever is about to
+    /// be written.
+    pub viewer: EntityId,
 }
 
 /// The host handshake, as the components see it. Build one with
@@ -147,6 +208,23 @@ impl ChatContext {
     /// Whether someone is signed in, tracked. Drives the composer's choice
     /// between sending and calling [`Self::demand_auth`].
     pub fn is_authenticated(&self) -> bool { self.viewer().is_some() }
+
+    /// Take the handle a deferred write needs, or raise the auth demand.
+    ///
+    /// Call this from wherever the reader acted — a click handler, a keydown —
+    /// and move the result into the future that does the work. Returning
+    /// `None` means nobody is signed in; the host has been asked to fix that
+    /// and the caller should simply stop.
+    pub fn write_session(&self) -> Option<WriteSession> {
+        let session = self.0.session.get_untracked();
+        match session.viewer {
+            Some(viewer) => Some(WriteSession { context: session.context.clone(), viewer }),
+            None => {
+                self.demand_auth();
+                None
+            }
+        }
+    }
 
     /// Ask the host to sign the reader in. Called when an anonymous reader
     /// reaches for an affordance that writes. A host that set no callback
@@ -222,15 +300,15 @@ impl ChatContextBuilder {
     }
 }
 
-/// The handshake, from inside a component. Panics when a component is mounted
-/// without one, which is a wiring mistake rather than a runtime condition.
-pub(crate) fn chat() -> ChatContext {
+/// The handshake, from inside a component body, a `Memo` or an `Effect`.
+///
+/// ONLY FROM THOSE. It resolves through Leptos context, which walks the
+/// reactive owner chain, and a `spawn_local` future or an ankurah subscription
+/// callback has no owner to walk — see the module docs. Take the handle where
+/// an owner exists and clone it into whatever runs later.
+///
+/// Panics when a component is mounted without a handshake above it, which is a
+/// wiring mistake rather than a runtime condition.
+pub fn chat() -> ChatContext {
     use_context::<ChatContext>().expect("mount chat components below ChatContext::new(..).provide()")
 }
-
-/// The ankurah context, tracked. Shorthand for the reads that appear on every
-/// query-building path.
-pub(crate) fn ctx() -> Context { chat().context() }
-
-/// The ankurah context, untracked — for write paths and event handlers.
-pub(crate) fn ctx_untracked() -> Context { chat().context_untracked() }

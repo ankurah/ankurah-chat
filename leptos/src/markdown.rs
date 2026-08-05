@@ -62,7 +62,10 @@ impl MentionCtx<'_> {
             let entity_id = ankurah::EntityId::from_base64(id).ok()?;
             Some((name, entity_id))
         });
-        let has_detail = crate::context::chat().hooks().member_detail.is_some();
+        // Rendering happens under a reactive owner; the click that follows does
+        // not, so the handle is taken here and moved into the handler.
+        let chat = crate::context::chat();
+        let has_detail = chat.hooks().member_detail.is_some();
         match resolved {
             Some((name, entity_id)) if has_detail => {
                 let open_detail = move |e: leptos::ev::MouseEvent| {
@@ -70,7 +73,7 @@ impl MentionCtx<'_> {
                     // (see the crate docs on `data-entity-id`); this click is
                     // the chip's, not the bubble's.
                     e.stop_propagation();
-                    if let Some(open) = crate::context::chat().hooks().member_detail.as_ref() {
+                    if let Some(open) = chat.hooks().member_detail.as_ref() {
                         open(entity_id);
                     }
                 };

@@ -42,9 +42,9 @@ mod thread_view;
 
 pub use read_state::DmReadStateManager;
 pub use sidebar::DmSidebar;
-pub use thread_view::DmThread;
+pub use thread_view::DmConversation;
 
-use crate::context::{chat, ctx_untracked};
+use crate::context::{ChatContext, WriteSession};
 use crate::queries;
 
 /// The viewer's threads, live. Scoped by policy to threads the viewer is in —
@@ -53,8 +53,13 @@ use crate::queries;
 /// are excluded, though nothing writes that flag today: the DM rate limiter
 /// tombstones the offending message and leaves the conversation standing (see
 /// `DmThread::deleted` and docs/moderation.md).
+/// Call from a component body or an effect — the handshake resolves through
+/// the reactive owner chain (see [`crate::context`]).
 pub fn threads_query() -> LiveQuery<DmThreadView> {
-    ctx_untracked().query::<DmThreadView>("deleted = false").expect("failed to create DmThreadView LiveQuery")
+    crate::context::chat()
+        .context_untracked()
+        .query::<DmThreadView>("deleted = false")
+        .expect("failed to create DmThreadView LiveQuery")
 }
 
 /// One conversation per correspondent, as the UI has to treat it: the row
@@ -175,14 +180,13 @@ pub fn converge_selection(threads: LiveQuery<DmThreadView>, selected: RwSignal<O
 /// twin created in the same instant is resolved by [`converge_selection`] as
 /// soon as it syncs. Fire-and-forget from a click handler; failures are logged
 /// and leave the selection untouched.
-pub fn open_thread_with(partner: EntityId, selected: RwSignal<Option<DmThreadView>>) {
-    let Some(me) = chat().viewer_untracked() else {
-        // Opening a conversation writes a thread row, and a thread has two
-        // named participants — there is nothing to write until we know who
-        // the reader is.
-        chat().demand_auth();
-        return;
-    };
+pub fn open_thread_with(chat: &ChatContext, partner: EntityId, selected: RwSignal<Option<DmThreadView>>) {
+    // Opening a conversation writes a thread row, and a thread has two named
+    // participants — there is nothing to write until we know who the reader
+    // is. The handshake comes in as an argument because this is called from
+    // click handlers, and is resolved here because the future below cannot.
+    let Some(session) = chat.write_session() else { return };
+    let me = session.viewer;
     if partner == me {
         // The UI does not offer this (no "Message" button on your own card),
         // and a self-thread has no other participant to notify or name.
@@ -190,15 +194,15 @@ pub fn open_thread_with(partner: EntityId, selected: RwSignal<Option<DmThreadVie
         return;
     }
     wasm_bindgen_futures::spawn_local(async move {
-        match find_or_create_thread(me, partner).await {
+        match find_or_create_thread(&session, partner).await {
             Ok(thread) => selected.set(Some(thread)),
             Err(e) => tracing::error!("Failed to open DM thread: {}", e),
         }
     });
 }
 
-async fn find_or_create_thread(me: EntityId, partner: EntityId) -> Result<DmThreadView, Box<dyn std::error::Error>> {
-    let (a, b) = canonical_pair(me, partner);
+async fn find_or_create_thread(session: &WriteSession, partner: EntityId) -> Result<DmThreadView, Box<dyn std::error::Error>> {
+    let (a, b) = canonical_pair(session.viewer, partner);
 
     // Parameterized, never spliced. Both participants build this exact
     // query, which is what makes find-or-create converge.
@@ -216,14 +220,14 @@ async fn find_or_create_thread(me: EntityId, partner: EntityId) -> Result<DmThre
         &format!("{THREADS_FOR_PAIR} AND deleted = false"),
         [(&a).into(), (&b).into(), (&b).into(), (&a).into()],
     )?;
-    let existing = ctx_untracked().fetch::<DmThreadView>(selection).await?;
+    let existing = session.context.fetch::<DmThreadView>(selection).await?;
     if let Some(winner) = canonical_thread(existing.iter().map(|t| t.id()))
         && let Some(row) = existing.into_iter().find(|t| t.id() == winner)
     {
         return Ok(row);
     }
 
-    let trx = ctx_untracked().begin();
+    let trx = session.context.begin();
     let created = trx
         .create(&DmThread { a: a.into(), b: b.into(), created_at: js_sys::Date::now() as i64, deleted: false })
         .await?
@@ -234,22 +238,30 @@ async fn find_or_create_thread(me: EntityId, partner: EntityId) -> Result<DmThre
 
 /// Send a DM into `thread`.
 ///
-/// `a`/`b` are copied verbatim from the thread — they are what lets the policy
-/// read scope answer "may this user see me" from the row alone — and `user` is
-/// the sender, which the write scope pins to the caller anyway. `text` is
-/// already wire-encoded by the composer (`@Name` runs re-encoded to `<@id>`
-/// tokens, ), the same bytes a room message would carry: DM text renders
-/// mentions, and the server deliberately does NOT fan them out (see
-/// server/src/workers/dm_notify.rs).
-pub async fn send_dm(thread: &DmThreadView, sender: &UserView, wire_text: String) -> Result<(), Box<dyn std::error::Error>> {
+/// `a`/`b` are copied verbatim from the thread — they are what lets a policy
+/// read scope answer "may this reader see me" from the row alone — and the
+/// sender is the session's reader, which a write scope pins to the caller
+/// anyway. `wire_text` is already encoded by the composer (`@Name` runs
+/// re-encoded to `<@id>` tokens), the same bytes a room message carries: DM
+/// text renders mentions the same way, and what a server does about a mention
+/// inside a private conversation is the server's affair.
+///
+/// The session is an argument rather than something looked up here, so the
+/// author and the context are the pair the caller resolved before it deferred
+/// — see [`crate::ChatContext::write_session`].
+pub async fn send_dm(
+    session: &WriteSession,
+    thread: &DmThreadView,
+    wire_text: String,
+) -> Result<(), Box<dyn std::error::Error>> {
     let a = thread.a()?;
     let b = thread.b()?;
-    let trx = ctx_untracked().begin();
+    let trx = session.context.begin();
     trx.create(&DmMessage {
         thread: ankurah::Ref::from(thread),
         a,
         b,
-        user: ankurah::Ref::from(sender),
+        user: session.viewer.into(),
         text: wire_text,
         timestamp: js_sys::Date::now() as i64,
         deleted: false,

@@ -39,6 +39,10 @@ pub fn MessageRow(
     mention_names: Memo<HashMap<String, String>>,
 ) -> impl IntoView {
     let context_menu = RwSignal::new(None::<(i32, i32)>);
+    // Taken once, here, where a reactive owner exists. Every closure below
+    // that runs later — a click handler, a deferred fetch — gets a clone
+    // rather than looking the handshake up again.
+    let chat = chat();
 
     // Clone values that will be used in multiple closures
     let message_for_author = message.clone();
@@ -118,9 +122,10 @@ pub fn MessageRow(
     // knows about a member — a profile card, a moderation view, nothing at
     // all. The coordinates are the trigger's bottom-left corner, so a host
     // that opens a popover can anchor it where the reader clicked.
-    let has_member_preview = chat().hooks().member_preview.is_some();
+    let has_member_preview = chat.hooks().member_preview.is_some();
     let open_profile = {
         let author = author.clone();
+        let chat = chat.clone();
         move |e: MouseEvent| {
             e.stop_propagation();
             let Some(user) = author() else { return };
@@ -132,7 +137,7 @@ pub fn MessageRow(
                     (r.left() as i32, r.bottom() as i32 + 6)
                 })
                 .unwrap_or((e.client_x(), e.client_y()));
-            if let Some(preview) = chat().hooks().member_preview.as_ref() {
+            if let Some(preview) = chat.hooks().member_preview.as_ref() {
                 preview(user.id(), px, py);
             }
         }
@@ -419,13 +424,15 @@ pub fn MessageRow(
                 // never on a tombstone.
                 <Show when={
                     let is_deleted = is_deleted.clone();
-                    move || !is_deleted() && chat().hooks().message_extras.is_some()
+                    let has_extras = chat.hooks().message_extras.is_some();
+                    move || !is_deleted() && has_extras
                 }>
                     {
                         let message_for_extras = message_for_extras.clone();
+                        let chat = chat.clone();
                         move || {
                             let message = message_for_extras.clone();
-                            chat().hooks().message_extras.as_ref().map(|render| render(message))
+                            chat.hooks().message_extras.as_ref().map(|render| render(message))
                         }
                     }
                 </Show>
@@ -489,9 +496,12 @@ fn ReplyPreview(target: EntityId, mention_names: Memo<HashMap<String, String>>) 
     let original = RwSignal::new(None::<MessageView>);
     let unresolvable = RwSignal::new(false);
     {
+        // Resolved HERE, in the body: the future's first poll is a microtask,
+        // by which time the handshake is no longer reachable.
+        let ctx = chat().context_untracked();
         let target = target.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::context::ctx_untracked().get::<MessageView>(target.clone()).await {
+            match ctx.get::<MessageView>(target.clone()).await {
                 // try_set: the row may have been unmounted (virtual scroll)
                 // before the fetch resolved.
                 Ok(m) => {
@@ -553,6 +563,16 @@ fn ReplyPreview(target: EntityId, mention_names: Memo<HashMap<String, String>>) 
     }
 }
 
+/// Whether the reader has asked for reduced motion. Unanswerable questions
+/// (no window, no matchMedia) read as "no preference", which is the browser
+/// default.
+fn prefers_reduced_motion() -> bool {
+    web_sys::window()
+        .and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten())
+        .map(|m| m.matches())
+        .unwrap_or(false)
+}
+
 /// Scroll a message's bubble into view with a brief highlight wash — only if
 /// it is currently rendered (the virtual scroller keeps a bounded window; a
 /// target outside it has no DOM node and the click quietly does nothing).
@@ -562,7 +582,15 @@ fn jump_to_message(msg_id_b64: &str) {
     let selector = format!(".messageBubble[data-msg-id=\"{msg_id_b64}\"]");
     let Ok(Some(el)) = doc.query_selector(&selector) else { return };
     let options = web_sys::ScrollIntoViewOptions::new();
-    options.set_behavior(web_sys::ScrollBehavior::Smooth);
+    // A reader who asked for less motion gets the jump without the glide. CSS
+    // cannot reach this — a behavior passed to scrollIntoView wins over
+    // `scroll-behavior` — so the preference is read here, which is what makes
+    // the crate's reduced-motion claim true rather than nearly true.
+    options.set_behavior(if prefers_reduced_motion() {
+        web_sys::ScrollBehavior::Auto
+    } else {
+        web_sys::ScrollBehavior::Smooth
+    });
     options.set_block(web_sys::ScrollLogicalPosition::Center);
     el.scroll_into_view_with_scroll_into_view_options(&options);
     // The wash animation plays once; removing the class afterwards lets a
@@ -588,7 +616,8 @@ fn jump_to_message(msg_id_b64: &str) {
 /// thing this crate knows for certain.
 #[component]
 fn TombstoneNotice(message: MessageView) -> impl IntoView {
-    match chat().hooks().tombstone_body.as_ref() {
+    let chat = chat();
+    match chat.hooks().tombstone_body.as_ref() {
         Some(render) => render(message),
         None => view! { <div class="messageText tombstoneNotice">"Message removed"</div> }.into_any(),
     }

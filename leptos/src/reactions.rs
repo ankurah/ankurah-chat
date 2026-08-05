@@ -14,6 +14,8 @@ use leptos::prelude::*;
 
 use ankurah_chat_model::{MessageView, Reaction, ReactionView};
 
+use crate::context::ChatContext;
+
 /// The fixed reaction set: a small picker, deliberately, not a full emoji
 /// keyboard. The composer's `:shortcode:` completion is the wide door.
 pub const REACTION_EMOJIS: [&str; 6] = ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F389}", "\u{1F615}", "\u{1F440}"];
@@ -41,18 +43,18 @@ pub struct ReactionChip {
 /// the opposite of "any active", and the chip grouping counts distinct users.
 ///
 /// Reacting is a write, so an anonymous reader is sent to the host's sign-in
-/// instead: there is no row to create until we know whose reaction it is.
-pub fn toggle_reaction(message: &MessageView, emoji: &str) {
-    let chat = crate::context::chat();
-    let Some(me) = chat.viewer_untracked() else {
-        chat.demand_auth();
-        return;
-    };
+/// instead: there is no row to create until we know whose reaction it is. The
+/// handshake comes in as an argument rather than being looked up here, because
+/// this is called from click handlers and resolves nothing once the future
+/// below has been deferred.
+pub fn toggle_reaction(chat: &ChatContext, message: &MessageView, emoji: &str) {
+    let Some(session) = chat.write_session() else { return };
+    let me = session.viewer;
+    let ctx = session.context;
     let message = message.clone();
     let emoji = emoji.to_string();
     wasm_bindgen_futures::spawn_local(async move {
         let result = async {
-            let ctx = crate::context::ctx_untracked();
             let selection = crate::queries::selection(
                 "message = ? AND user = ? AND emoji = ?",
                 [(&message.id()).into(), (&me).into(), emoji.as_str().into()],
@@ -88,16 +90,21 @@ pub fn toggle_reaction(message: &MessageView, emoji: &str) {
 /// `chips` is empty — the caller already gates on that, but keep it safe.
 #[component]
 pub fn ReactionBar(message: MessageView, #[prop(into)] chips: Signal<Vec<ReactionChip>>) -> impl IntoView {
+    // Taken here, where a reactive owner exists, and cloned into every chip's
+    // click handler — which has none.
+    let chat = crate::context::chat();
     view! {
         <div class="reactionBar">
             {move || {
                 let message = message.clone();
+                let chat = chat.clone();
                 chips
                     .get()
                     .into_iter()
                     .map(move |chip| {
                         let emoji = chip.emoji.clone();
                         let message = message.clone();
+                        let chat = chat.clone();
                         let noun = if chip.count == 1 { "reaction" } else { "reactions" };
                         let hint = if chip.mine { "Click to remove yours" } else { "Click to react" };
                         let label = format!("{} {} {}. {}.", chip.count, chip.emoji, noun, hint);
@@ -107,7 +114,7 @@ pub fn ReactionBar(message: MessageView, #[prop(into)] chips: Signal<Vec<Reactio
                                 class=if chip.mine { "reactionChip mine" } else { "reactionChip" }
                                 aria-pressed=if chip.mine { "true" } else { "false" }
                                 aria-label=label
-                                on:click=move |_| toggle_reaction(&message, &emoji)
+                                on:click=move |_| toggle_reaction(&chat, &message, &emoji)
                             >
                                 <span class="reactionEmoji" aria-hidden="true">{chip.emoji.clone()}</span>
                                 <span class="reactionCount">{chip.count}</span>

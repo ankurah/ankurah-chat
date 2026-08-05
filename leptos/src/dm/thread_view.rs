@@ -37,8 +37,12 @@ use crate::dm;
 ///
 /// Mountable on its own — a page that only offers "message me" mounts this and
 /// nothing else.
+///
+/// Named for the conversation rather than the row, because `DmThread` is the
+/// model's own struct name and a host that glob-imports both crates should not
+/// have to disambiguate a component from a collection.
 #[component]
-pub fn DmThread(
+pub fn DmConversation(
     thread: RwSignal<Option<DmThreadView>>,
     /// The viewer's whole thread set, so an open conversation can be read
     /// across every row its pair has (see [`crate::dm::pair_rows`]).
@@ -96,13 +100,15 @@ pub fn DmThread(
 
     let messages = pane.items;
 
+    let chat = chat();
     let partner_name = {
         let users = users.clone();
         Signal::derive(move || {
             let Some(t) = thread.get() else { return String::new() };
             // Track display-name edits: a rename retitles the open thread.
             let _ = users.get();
-            match chat().viewer_untracked().and_then(|me| dm::partner_of(&t, me)) {
+            // Tracked: signing in mid-visit has to name the correspondent.
+            match chat.viewer().and_then(|me| dm::partner_of(&t, me)) {
                 Some(partner) => dm::display_name(&users, partner),
                 None => "Yourself".to_string(),
             }
@@ -188,7 +194,6 @@ pub fn DmThread(
 
                         <Composer
                             target=ComposerTarget::Dm(current_thread.clone())
-                            current_user=current_user
                             editing_message=editing_message
                             replying_to=replying_to
                             messages=no_room_messages

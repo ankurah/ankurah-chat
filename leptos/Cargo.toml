@@ -41,6 +41,8 @@ features = [
     "Event", "InputEvent", "HtmlTextAreaElement", "CssStyleDeclaration",
     # Tail pinning through asynchronous row growth (see scroll_pane).
     "ResizeObserver",
-    # Jump-to-original on a reply chip: smooth scroll plus a highlight class.
-    "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition",
+    # Jump-to-original on a reply chip: smooth scroll plus a highlight class,
+    # and the reduced-motion query that decides whether the scroll glides — a
+    # behavior passed to scrollIntoView is not something CSS can override.
+    "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition", "MediaQueryList",
 ]

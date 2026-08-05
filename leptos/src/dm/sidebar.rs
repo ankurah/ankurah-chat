@@ -40,7 +40,12 @@ pub fn DmSidebar(
     // Nobody signed in means no conversations of one's own. The section still
     // renders — a host that laid out a rail gets its heading and an empty
     // state, not a hole.
-    let me = chat().viewer_untracked();
+    //
+    // TRACKED, and threaded down as a signal: a reader who signs in mid-visit
+    // must start seeing correspondents' names in rows this component may
+    // already have built.
+    let chat = chat();
+    let me = Signal::derive(move || chat.viewer());
 
     // Duplicate threads from a concurrent first-DM race collapse to one row per
     // correspondent; conversations with no messages are hidden, and the rest
@@ -124,16 +129,18 @@ fn DmListItem(
     selected_dm: RwSignal<Option<DmThreadView>>,
     read_state: DmReadStateManager,
     /// The reader, when there is one. Without one there is no "other
-    /// participant" to name.
-    me: Option<ankurah::EntityId>,
+    /// participant" to name — and signing in mid-visit has to fill the name
+    /// in, so this tracks rather than being read once.
+    me: Signal<Option<ankurah::EntityId>>,
 ) -> impl IntoView {
     let thread_id = thread.id().to_base64();
-    let partner = me.and_then(|me| dm::partner_of(&thread, me));
+    let thread_for_partner = thread.clone();
+    let partner = Signal::derive(move || me.get().and_then(|me| dm::partner_of(&thread_for_partner, me)));
 
     // Reactive: a rename retitles the row without a reload.
     let partner_name = {
         let users = users.clone();
-        move || match partner {
+        move || match partner.get() {
             Some(p) => {
                 let _ = users.get();
                 dm::display_name(&users, p)
@@ -144,7 +151,7 @@ fn DmListItem(
         }
     };
     let partner_name_for_initials = partner_name.clone();
-    let hue = fmt::hue_class(&partner.map(|p| p.to_base64()).unwrap_or_default());
+    let hue = move || fmt::hue_class(&partner.get().map(|p| p.to_base64()).unwrap_or_default());
 
     let thread_id_selected = thread_id.clone();
     let is_selected = move || selected_dm.get().as_ref().map(|t| t.id().to_base64() == thread_id_selected).unwrap_or(false);
@@ -157,7 +164,7 @@ fn DmListItem(
             class=move || if is_selected() { "roomItem dmItem selected" } else { "roomItem dmItem" }
             on:click=move |_| selected_dm.set(Some(thread_for_click.clone()))
         >
-            <span class=format!("dmAvatar {}", hue) aria-hidden="true">
+            <span class=move || format!("dmAvatar {}", hue()) aria-hidden="true">
                 {move || fmt::initials(&partner_name_for_initials())}
             </span>
             <span class="roomLabel">{partner_name}</span>

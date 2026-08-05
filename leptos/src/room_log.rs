@@ -182,7 +182,6 @@ pub fn RoomLog(
 
                             <Composer
                                 target=ComposerTarget::Room(current_room.clone())
-                                current_user=current_user
                                 editing_message=editing_message
                                 replying_to=replying_to
                                 messages=messages

@@ -34,7 +34,8 @@ use ankurah_chat_model::{DmMessageView, DmReadState, DmReadStateView, DmThreadVi
 use send_wrapper::SendWrapper;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::context::ctx_untracked;
+use ankurah::Context;
+
 use crate::queries;
 
 /// This client's clock, in the project's ms-since-epoch unit.
@@ -129,6 +130,10 @@ fn stamp_of(message: &DmMessageView) -> Option<i64> { message.timestamp().ok() }
 pub struct DmReadStateManager(SendWrapper<Arc<Inner>>);
 
 struct Inner {
+    /// Held rather than looked up, for the reason [`crate::read_state`] gives:
+    /// the subscription callbacks and flush loops here run outside the
+    /// reactive system, where the handshake cannot be resolved.
+    context: Context,
     user_id: EntityId,
     /// The viewer's own DmReadState rows, live.
     cursors: LiveQuery<DmReadStateView>,
@@ -168,14 +173,18 @@ struct ThreadWindow {
 }
 
 impl DmReadStateManager {
-    pub fn new(threads: LiveQuery<DmThreadView>, user_id: EntityId) -> Self {
-        let cursors = ctx_untracked()
+    /// `context` and `user_id` are the host's, as with room cursors: these
+    /// rows belong to one reader, so a host that signs a different reader in
+    /// builds a new manager.
+    pub fn new(context: Context, threads: LiveQuery<DmThreadView>, user_id: EntityId) -> Self {
+        let cursors = context
             .query::<DmReadStateView>(
                 queries::selection("user = ?", [(&user_id).into()]).expect("static dmreadstate selection parses"),
             )
             .expect("failed to create DmReadStateView LiveQuery");
 
         let inner = Arc::new(Inner {
+            context,
             user_id,
             cursors: cursors.clone(),
             last_read: Mut::new(HashMap::new()),
@@ -334,7 +343,7 @@ impl DmReadStateManager {
         }
         let inner = Arc::clone(inner);
         spawn_local(async move {
-            if let Err(e) = write_cursor(&row, ts).await {
+            if let Err(e) = write_cursor(&inner.context, &row, ts).await {
                 tracing::error!("Failed to repair a DM read cursor that had run past its thread ({}): {}", row_id.to_base64(), e);
             }
             inner.healing.lock().unwrap().remove(&row_id);
@@ -349,7 +358,7 @@ impl DmReadStateManager {
         let selection =
             queries::selection("thread = ? AND deleted = false ORDER BY timestamp DESC LIMIT 10", [(&thread_id).into()])
                 .expect("static dm unread window selection parses");
-        let query = match ctx_untracked().query::<DmMessageView>(selection) {
+        let query = match inner.context.query::<DmMessageView>(selection) {
             Ok(q) => q,
             Err(e) => {
                 tracing::error!("Failed to create DM unread window for thread {}: {:?}", key, e);
@@ -528,13 +537,13 @@ impl DmReadStateManager {
             None => {
                 let recorded = inner.row_ids.lock().unwrap().get(thread_id).copied();
                 match recorded {
-                    Some(id) => ctx_untracked().get::<DmReadStateView>(id).await.ok(),
+                    Some(id) => inner.context.get::<DmReadStateView>(id).await.ok(),
                     None => None,
                 }
             }
         };
 
-        let trx = ctx_untracked().begin();
+        let trx = inner.context.begin();
         match existing {
             Some(row) => {
                 row.edit(&trx)?.last_read_ts().set(&ts)?;
@@ -552,8 +561,8 @@ impl DmReadStateManager {
 }
 
 /// Set one cursor row's `last_read_ts`, for the repair path above.
-async fn write_cursor(row: &DmReadStateView, ts: i64) -> Result<(), Box<dyn std::error::Error>> {
-    let trx = ctx_untracked().begin();
+async fn write_cursor(context: &Context, row: &DmReadStateView, ts: i64) -> Result<(), Box<dyn std::error::Error>> {
+    let trx = context.begin();
     row.edit(&trx)?.last_read_ts().set(&ts)?;
     trx.commit().await?;
     Ok(())
