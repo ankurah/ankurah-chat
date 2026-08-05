@@ -388,6 +388,14 @@ impl ReadStateManager {
                 inner.row_ids.lock().unwrap().insert(room_id.to_string(), created.id());
             }
         }
+        // Re-checked at the last moment before the write leaves: resolving
+        // `existing` may have suspended in `context.get`, and `create` awaits
+        // too. A disposal landing in either window must end with this
+        // transaction dropped uncommitted, not written through the departed
+        // session's context.
+        if inner.disposed.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         trx.commit().await?;
         Ok(())
     }

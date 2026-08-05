@@ -175,9 +175,12 @@ pub struct ChatContext(SendWrapper<Arc<Inner>>);
 #[derive(Default)]
 struct Shared {
     /// The generation these were built against. Anything found here for an
-    /// older one is taken out and dropped — which is what ends the old
-    /// queries, and lets the old cursor managers die (their subscriptions hold
-    /// only weak handles back, precisely so that dropping is enough).
+    /// older one is taken out, DISPOSED, and dropped: the queries end when
+    /// their registrations drop, and the cursor managers end because
+    /// `discard_stale` calls their `dispose()` explicitly — a background task
+    /// holding a strong handle would otherwise keep one alive past the swap.
+    /// The weak subscription captures serve the other half: they break the
+    /// cycle that would stop a manager from ever dropping at all.
     built_for: u64,
     members: Option<QuerySlot<UserView>>,
     reactions: Option<QuerySlot<ReactionView>>,
