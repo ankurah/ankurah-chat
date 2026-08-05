@@ -13,6 +13,11 @@
 //! notification inboxes, link-preview caches) belong in that deployment's own
 //! model crate, which may depend on this one and reference these types freely.
 //!
+//! One module here is not a collection: [`mention_display`] converts between
+//! the stored mention token and the `@DisplayName` a composer shows. It is
+//! here because it restates the scanner's token rules from the writing side,
+//! and the two must never be changed apart.
+//!
 //! # Collection identity is a wire contract
 //!
 //! ankurah derives a collection's identifier from the struct name lowercased
@@ -48,6 +53,7 @@
 use ankurah::{EntityId, Model, Ref};
 use serde::{Deserialize, Serialize};
 
+pub mod mention_display;
 pub mod text;
 pub use text::{extract_urls, parse_mentions, MAX_MENTION_ID_LEN};
 

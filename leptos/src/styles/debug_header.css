@@ -1,0 +1,92 @@
+/* Scroll-manager debug strip (developer affordance; intentionally low-key). */
+
+.ankurah-chat .debugHeader, .ankurah-chat.debugHeader {
+  flex-shrink: 0;
+  padding: var(--akchat-sp-2) var(--akchat-sp-4);
+  background-color: var(--akchat-evergreen-deep);
+  border-bottom: 1px solid var(--akchat-chrome-border);
+  font-size: 11px;
+  font-family: var(--akchat-font-mono);
+  color: var(--akchat-chrome-text-dim);
+  display: flex;
+  flex-direction: column;
+  gap: var(--akchat-sp-1);
+}
+
+.ankurah-chat .debugRow, .ankurah-chat.debugRow {
+  display: flex;
+  gap: var(--akchat-sp-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.ankurah-chat .debugLabel, .ankurah-chat.debugLabel {
+  color: var(--akchat-chrome-text-dim);
+  opacity: 0.75;
+  font-weight: 600;
+}
+
+.ankurah-chat .debugValue, .ankurah-chat.debugValue {
+  color: var(--akchat-chrome-text);
+}
+
+.ankurah-chat .debugValue.trigger-active, .ankurah-chat.debugValue.trigger-active {
+  color: var(--akchat-danger-dot);
+  font-weight: bold;
+}
+
+.ankurah-chat .debugValue.boundary-hit, .ankurah-chat.debugValue.boundary-hit {
+  color: var(--akchat-ok-dot);
+  font-weight: bold;
+}
+
+.ankurah-chat .debugStatus, .ankurah-chat.debugStatus {
+  font-size: 14px;
+  margin-left: var(--akchat-sp-1);
+}
+
+.ankurah-chat .queryText, .ankurah-chat.queryText {
+  color: var(--akchat-accent);
+}
+
+.ankurah-chat .mode-live, .ankurah-chat.mode-live {
+  color: var(--akchat-ok-dot);
+  font-weight: bold;
+}
+
+.ankurah-chat .mode-backward, .ankurah-chat.mode-backward {
+  color: var(--akchat-unread-bg);
+  font-weight: bold;
+}
+
+.ankurah-chat .mode-forward, .ankurah-chat.mode-forward {
+  color: var(--akchat-danger-dot);
+  font-weight: bold;
+}
+
+.ankurah-chat .debugButton, .ankurah-chat.debugButton {
+  padding: 4px var(--akchat-sp-3);
+  margin-left: var(--akchat-sp-2);
+  background-color: var(--akchat-chrome-hover);
+  color: var(--akchat-chrome-text);
+  border: 1px solid var(--akchat-chrome-border);
+  border-radius: var(--akchat-r-sm);
+  font-size: 11px;
+  font-family: var(--akchat-font-mono);
+  cursor: pointer;
+  transition: background-color var(--akchat-t-fast) var(--akchat-ease);
+}
+
+.ankurah-chat .debugButton:hover, .ankurah-chat.debugButton:hover {
+  background-color: var(--akchat-chrome-active);
+}
+
+@keyframes akchat-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}

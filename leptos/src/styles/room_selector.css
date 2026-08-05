@@ -1,0 +1,202 @@
+/* The room list: a header, the rows, and the create-room input. The rail
+ * they sit in belongs to the host. */
+
+.ankurah-chat .sidebarHeader, .ankurah-chat.sidebarHeader {
+  padding: 16px 16px 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.ankurah-chat .sidebarTitle, .ankurah-chat.sidebarTitle {
+  font-size: var(--akchat-fs-xs);
+  font-weight: 750;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--akchat-chrome-text-dim);
+}
+
+.ankurah-chat .createRoomButton, .ankurah-chat.createRoomButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background-color: var(--akchat-chrome-hover);
+  color: var(--akchat-chrome-text);
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background-color var(--akchat-t-fast) var(--akchat-ease),
+    color var(--akchat-t-fast) var(--akchat-ease);
+}
+
+.ankurah-chat .createRoomButton svg, .ankurah-chat.createRoomButton svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ankurah-chat .createRoomButton:hover, .ankurah-chat.createRoomButton:hover {
+  background-color: var(--akchat-accent);
+  color: var(--akchat-on-accent);
+}
+
+.ankurah-chat .roomList, .ankurah-chat.roomList {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 10px 14px;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ankurah-chat .roomList::-webkit-scrollbar-thumb, .ankurah-chat.roomList::-webkit-scrollbar-thumb {
+  background: var(--akchat-chrome-scrollbar);
+  background-clip: content-box;
+}
+
+.ankurah-chat .createRoomInput, .ankurah-chat.createRoomInput {
+  padding: 2px 2px 8px;
+}
+
+.ankurah-chat .createRoomInput input, .ankurah-chat.createRoomInput input {
+  width: 100%;
+  padding: 8px 10px;
+  background-color: var(--akchat-chrome-hover);
+  border: 1px solid var(--akchat-chrome-border);
+  border-radius: 8px;
+  color: var(--akchat-chrome-text);
+  font-size: var(--akchat-fs-md);
+  min-width: 50px;
+  outline: none;
+  transition: border-color var(--akchat-t-fast) var(--akchat-ease);
+}
+
+.ankurah-chat .createRoomInput input:focus, .ankurah-chat.createRoomInput input:focus {
+  border-color: var(--akchat-accent);
+}
+
+.ankurah-chat .createRoomInput input::placeholder, .ankurah-chat.createRoomInput input::placeholder {
+  color: var(--akchat-chrome-text-dim);
+}
+
+.ankurah-chat .roomItem, .ankurah-chat.roomItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--akchat-chrome-text-dim);
+  cursor: pointer;
+  transition:
+    background-color var(--akchat-t-fast) var(--akchat-ease),
+    color var(--akchat-t-fast) var(--akchat-ease);
+}
+
+.ankurah-chat .roomHash, .ankurah-chat.roomHash {
+  opacity: 0.55;
+  font-weight: 650;
+  flex-shrink: 0;
+}
+
+.ankurah-chat .roomLabel, .ankurah-chat.roomLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ankurah-chat .roomItem:hover, .ankurah-chat.roomItem:hover {
+  background-color: var(--akchat-chrome-hover);
+  color: var(--akchat-chrome-text);
+}
+
+.ankurah-chat .roomItem.selected, .ankurah-chat.roomItem.selected {
+  background-color: var(--akchat-accent);
+  color: var(--akchat-on-accent);
+  font-weight: 650;
+}
+
+.ankurah-chat .roomItem.selected .roomHash, .ankurah-chat.roomItem.selected .roomHash {
+  opacity: 0.6;
+}
+
+.ankurah-chat .unreadBadge, .ankurah-chat.unreadBadge {
+  flex-shrink: 0;
+  background-color: var(--akchat-unread-bg);
+  color: var(--akchat-unread-text);
+  border-radius: var(--akchat-r-full);
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 750;
+  min-width: 20px;
+  text-align: center;
+}
+
+.ankurah-chat .emptyRooms, .ankurah-chat.emptyRooms {
+  padding: 12px 8px;
+  text-align: center;
+  color: var(--akchat-chrome-text-dim);
+  font-size: var(--akchat-fs-sm);
+  line-height: 1.5;
+}
+
+/* Mobile: the rows become a horizontal chip strip. */
+@media (max-width: 768px) {
+  .ankurah-chat .sidebarHeader, .ankurah-chat.sidebarHeader {
+    padding: 10px 12px 6px;
+    flex-shrink: 0;
+    width: 100%;
+  }
+
+  .ankurah-chat .createRoomButton, .ankurah-chat.createRoomButton {
+    width: 24px;
+    height: 24px;
+  }
+
+  .ankurah-chat .roomList, .ankurah-chat.roomList {
+    padding: 2px 10px 10px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    touch-action: pan-x;
+    -webkit-overflow-scrolling: touch;
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .ankurah-chat .roomItem, .ankurah-chat.roomItem {
+    padding: 6px 12px;
+    white-space: nowrap;
+    border-radius: var(--akchat-r-full);
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+
+  .ankurah-chat .createRoomInput, .ankurah-chat.createRoomInput {
+    padding: 0;
+    flex-shrink: 0;
+  }
+
+  .ankurah-chat .createRoomInput input, .ankurah-chat.createRoomInput input {
+    width: 150px;
+  }
+
+  .ankurah-chat .emptyRooms, .ankurah-chat.emptyRooms {
+    padding: 6px 8px;
+    white-space: nowrap;
+  }
+}

@@ -20,9 +20,11 @@ that want to put live chat surfaces in their own pages.
 ## Crates
 
 - `ankurah-chat-model` — the chat collections (Message, Room, User, Reaction,
-  ReadState, and the DM trio DmThread/DmMessage/DmReadState) and the
-  mention/URL scanner. This is the ONE definition each of them: a chat server
-  and its clients both link this crate, so neither can drift from the other.
+  ReadState, and the DM trio DmThread/DmMessage/DmReadState), the mention/URL
+  scanner, and the `mention_display` codec that lets a composer show
+  `@DisplayName` over the stored token. This is the ONE definition each of
+  them: a chat server and its clients both link this crate, so neither can
+  drift from the other.
   **Interop constraint:** ankurah derives a collection's identifier from the
   struct name and a property's from the field name, so those names are wire
   and are pinned by live data — a rename is a migration, never a refactor.
@@ -51,8 +53,93 @@ these structs are the format of live rows, so the tree you compile against is
 something to choose rather than follow.
 
 ```toml
-ankurah-chat-model = { git = "https://github.com/ankurah/ankurah-chat", rev = "<full sha>" }
+ankurah-chat-model  = { git = "https://github.com/ankurah/ankurah-chat", rev = "<full sha>" }
+ankurah-chat-leptos = { git = "https://github.com/ankurah/ankurah-chat", rev = "<full sha>" }
 ```
+
+Mounting a surface is three steps — provide the handshake, install the styles,
+mount what you want:
+
+```rust
+use ankurah_chat_leptos::{ChatContext, RoomLog, install_styles};
+
+ChatContext::new(context)              // your ankurah::Context
+    .viewer(Some(my_user_id))          // or leave it out: read-only
+    .on_auth_demand(|| start_sign_in())
+    .provide();
+install_styles();
+
+view! { <RoomLog room=selected_room users=members read_state=cursors /> }
+```
+
+`members` is a `LiveQuery<UserView>` and `cursors` a `ReadStateManager`, both
+built by you against the same context. Who the reader is comes from the
+handshake, not from a prop.
+
+The surfaces are `RoomSelector`, `RoomLog`, `Composer`, `DmSidebar` and
+`DmConversation`; mount any of them, in any combination.
+
+### Theming
+
+Every colour and metric is an `--akchat-*` custom property. Re-declare the ones
+you want **on `.ankurah-chat`**, which is the class each component root carries:
+
+```css
+.ankurah-chat { --akchat-bg: #101014; --akchat-text: #e7e7ea; }
+```
+
+**Not on `:root`.** The crate declares its own defaults on the component root
+itself, and a declaration on an element always beats a value inherited from an
+ancestor — specificity only orders declarations competing for the same element.
+A `:root` mapping would be inherited down and then overwritten by the defaults
+it was meant to replace. On `.ankurah-chat` it is one class against the crate's
+zero (its defaults use `:where`), so your value wins.
+
+### Signing in mid-visit
+
+`ChatContext::set_session(context, viewer)` swaps the session under mounted
+components. Nothing unmounts, so the draft, the armed reply, the selected room,
+the open conversation and the message being edited all stay exactly as they
+were.
+
+Everything you handed in is scoped to a session too — the rooms list, the
+members list, the DM thread set, the two read-cursor managers — so all of it has
+to be rebuilt against the new context. Those props take a `Live`, so you swap
+what your signal holds and the components re-point in place:
+
+```rust
+// Hold what you hand in, so you can swap it.
+let members = RwSignal::new(SendWrapper::new(context.query::<UserView>("true")?));
+let cursors = RwSignal::new(SendWrapper::new(ReadStateManager::new(context.clone(), rooms, me)));
+
+view! {
+    <RoomLog
+        room=selected_room
+        users=Live::reactive(move || members.get().take())
+        read_state=Live::reactive(move || cursors.get().take())
+    />
+}
+
+// On sign-in — ALL OF IT IN ONE SYNCHRONOUS BLOCK. Each of these is a signal
+// write, and the components read between them if you let them: a swap split
+// across two ticks leaves a moment where the session says one reader and the
+// queries still answer for the other, which is a moment where a cursor can be
+// written to the wrong rows.
+let chat = ankurah_chat_leptos::chat();
+chat.set_session(new_context.clone(), Some(user_id));
+members.set(SendWrapper::new(new_context.query::<UserView>("true")?));
+cursors.set(SendWrapper::new(ReadStateManager::new(new_context, rooms, user_id)));
+```
+
+A host with nothing to swap passes the value directly — `Live` is
+`#[prop(into)]`-friendly. A constant subscribes to nothing, though it is not
+free: each read runs the closure and clones the handle, which for a `LiveQuery`
+or a cursor manager is an `Arc` bump.
+
+One thing does not survive: the timeline's loaded window. A `ScrollManager`
+takes its context at construction and ankurah-virtual-scroll 0.9.0 cannot
+re-point one, so the pane rebuilds and the reader lands at the live tail rather
+than wherever they had paged back to.
 
 Then, on your side:
 
@@ -87,11 +174,15 @@ copied, so no second copy of the scanner caps exists to drift. community's
 model crate keeps what is community's alone (moderation records, the
 notification inbox, the link-preview cache) and re-exports what moved.
 
-Next: the components extract to `ankurah-chat-leptos` on the same terms (a
-cleaned copy of community's, x-ray wiring replaced by the generic registry
-hook), with community as the reference consumer and the danielnorman.net
-portfolio embed as the second. Consumer requirements are pinned on
-ankurah/community#46; the wider reconvergence map is ankurah/community#53.
+The components followed on the same terms: extracted, not copied, with
+community consuming them as the reference embedder and the danielnorman.net
+portfolio embed as the second. The inspector wiring community's components
+carried is gone from them — every message bubble now carries `data-entity-id`
+and `data-collection`, and community's x-ray installs its own handlers over
+those, which is the end state
+[ankurah/community#53](https://github.com/ankurah/community/issues/53)
+describes. Consumer requirements are pinned on
+[ankurah/community#46](https://github.com/ankurah/community/issues/46).
 
 Not published to crates.io yet: consumers pin a git rev while the API is
 still moving under dogfooding.

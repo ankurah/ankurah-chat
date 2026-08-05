@@ -1,0 +1,99 @@
+/* Direct messages: the sidebar section and the thread header.
+ *
+ * Rows reuse .roomItem and .unreadBadge so a conversation reads as a sibling
+ * of a room rather than a different kind of object; only the leading glyph
+ * differs (an initials disc instead of the # hash). */
+
+.ankurah-chat .dmSectionHeader, .ankurah-chat.dmSectionHeader {
+  padding-top: 12px;
+  border-top: 1px solid var(--akchat-chrome-border);
+}
+
+/* The room list keeps the elastic space; conversations take what they need up
+ * to a ceiling, then scroll. Without the ceiling a busy DM list would push the
+ * rooms out of view — and rooms are the shared, primary surface. */
+.ankurah-chat .dmList, .ankurah-chat.dmList {
+  flex: 0 1 auto;
+  max-height: 42%;
+}
+
+.ankurah-chat .dmAvatar, .ankurah-chat.dmAvatar {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--akchat-r-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 750;
+  color: var(--akchat-on-accent);
+  background: var(--akchat-chrome-hover);
+}
+
+.ankurah-chat .dmAvatar.hue-0, .ankurah-chat.dmAvatar.hue-0 { background: var(--akchat-hue-0); }
+.ankurah-chat .dmAvatar.hue-1, .ankurah-chat.dmAvatar.hue-1 { background: var(--akchat-hue-1); }
+.ankurah-chat .dmAvatar.hue-2, .ankurah-chat.dmAvatar.hue-2 { background: var(--akchat-hue-2); }
+.ankurah-chat .dmAvatar.hue-3, .ankurah-chat.dmAvatar.hue-3 { background: var(--akchat-hue-3); }
+.ankurah-chat .dmAvatar.hue-4, .ankurah-chat.dmAvatar.hue-4 { background: var(--akchat-hue-4); }
+.ankurah-chat .dmAvatar.hue-5, .ankurah-chat.dmAvatar.hue-5 { background: var(--akchat-hue-5); }
+.ankurah-chat .dmAvatar.hue-6, .ankurah-chat.dmAvatar.hue-6 { background: var(--akchat-hue-6); }
+.ankurah-chat .dmAvatar.hue-7, .ankurah-chat.dmAvatar.hue-7 { background: var(--akchat-hue-7); }
+
+/* Thread header: who you are talking to, and the one fact about DMs a reader
+ * should not have to look up — that nobody else can read this, moderators
+ * included. */
+.ankurah-chat .dmThreadHeader, .ankurah-chat.dmThreadHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--akchat-border);
+  flex-shrink: 0;
+}
+
+.ankurah-chat .dmThreadWith, .ankurah-chat.dmThreadWith {
+  font-weight: 700;
+  font-size: var(--akchat-fs-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ankurah-chat .dmThreadPrivacy, .ankurah-chat.dmThreadPrivacy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  font-size: var(--akchat-fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--akchat-text-dim);
+}
+
+.ankurah-chat .dmThreadPrivacy svg, .ankurah-chat.dmThreadPrivacy svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* Mobile: the rail becomes a horizontal chip strip (room_selector.css), and a
+ * second section needs a second strip. A workable stopgap rather than a mobile
+ * design — that pass will want a tab or a drawer here instead of two stacked
+ * strips eating a third of a phone screen. How tall the rail itself grows to
+ * hold them is the host's, since the rail is. */
+@media (max-width: 768px) {
+  .ankurah-chat .dmSectionHeader, .ankurah-chat.dmSectionHeader {
+    padding: 8px 12px 4px;
+  }
+
+  .ankurah-chat .dmList, .ankurah-chat.dmList {
+    max-height: none;
+    padding: 2px 10px 8px;
+  }
+
+  .ankurah-chat .dmThreadHeader, .ankurah-chat.dmThreadHeader {
+    padding: 8px 12px;
+  }
+}

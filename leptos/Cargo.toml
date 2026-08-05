@@ -6,4 +6,43 @@ description = "Embeddable Leptos chat components for Ankurah: room log, composer
 license = "MIT OR Apache-2.0"
 publish = false
 
-[dependencies]
+# A browser crate: every component here reaches for `window`, a scroll
+# container, a textarea's caret. `ankurah/wasm` is named directly rather than
+# by target (as ankurah-chat-model names it) because there is no other target
+# this crate builds for — see the `cfg(target_arch)` gate on lib.rs, which
+# leaves a native build of this workspace an empty crate rather than a broken
+# one, and keeps `cargo test --workspace` on the model's own terms.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ankurah = { workspace = true, features = ["derive", "wasm"] }
+ankurah-chat-model = { path = "../model" }
+ankurah-signals = { workspace = true, features = ["reactive-graph"] }
+ankurah-virtual-scroll = { workspace = true }
+leptos = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+js-sys = { workspace = true }
+send_wrapper = "0.6"
+tracing = "0.1"
+# Markdown subset for message bodies. Events map to typed Leptos nodes, never
+# innerHTML, so the default features (the HTML renderer, getopts) stay off —
+# the pull parser is the whole of what is used.
+pulldown-cmark = { version = "=0.13.4", default-features = false }
+# A randomness backend for entity ids, which ankurah reaches transitively and
+# which refuses wasm32-unknown-unknown until one is named. The reasoning is
+# spelled out in full in ankurah-chat-model's dependency table.
+getrandom = { workspace = true }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+workspace = true
+features = [
+    "Window", "Document",
+    "Element", "HtmlElement", "HtmlStyleElement", "Node", "NodeList", "DomRect", "DomTokenList", "EventTarget",
+    "Event", "InputEvent", "HtmlTextAreaElement", "CssStyleDeclaration",
+    # Tail pinning through asynchronous row growth (see scroll_pane).
+    "ResizeObserver",
+    # Jump-to-original on a reply chip: smooth scroll plus a highlight class,
+    # and the reduced-motion query that decides whether the scroll glides — a
+    # behavior passed to scrollIntoView is not something CSS can override.
+    "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition", "MediaQueryList",
+]

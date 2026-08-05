@@ -1,0 +1,106 @@
+/* Right-click menu on own messages (and, for moderators, anyone's). */
+
+.ankurah-chat .contextMenu, .ankurah-chat.contextMenu {
+  min-width: 168px;
+  padding: 5px;
+  background: var(--akchat-surface);
+  border: 1px solid var(--akchat-border);
+  border-radius: 12px;
+  box-shadow: var(--akchat-shadow-3);
+  z-index: 1000;
+  animation: akchat-contextMenuIn 120ms var(--akchat-ease) both;
+}
+
+@keyframes akchat-contextMenuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Quick-reaction row at the top of the menu. */
+
+.ankurah-chat .contextMenuReactions, .ankurah-chat.contextMenuReactions {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+}
+
+/* Divider only when Edit/Delete items follow. */
+.ankurah-chat .contextMenuReactions.withItems, .ankurah-chat.contextMenuReactions.withItems {
+  margin-bottom: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--akchat-border);
+}
+
+.ankurah-chat .contextMenuEmoji, .ankurah-chat.contextMenuEmoji {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  font-size: 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color var(--akchat-t-fast) var(--akchat-ease);
+}
+
+.ankurah-chat .contextMenuEmoji:hover, .ankurah-chat.contextMenuEmoji:hover,
+.ankurah-chat .contextMenuEmoji:focus-visible, .ankurah-chat.contextMenuEmoji:focus-visible {
+  background-color: var(--akchat-surface-3);
+}
+
+.ankurah-chat .contextMenuEmoji:focus-visible, .ankurah-chat.contextMenuEmoji:focus-visible {
+  outline-offset: -2px;
+}
+
+.ankurah-chat .contextMenuItem, .ankurah-chat.contextMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--akchat-fs-md);
+  font-weight: 550;
+  color: var(--akchat-text);
+  transition: background-color var(--akchat-t-fast) var(--akchat-ease);
+}
+
+.ankurah-chat .contextMenuItem svg, .ankurah-chat.contextMenuItem svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--akchat-text-3);
+}
+
+.ankurah-chat .contextMenuItem:hover, .ankurah-chat.contextMenuItem:hover {
+  background-color: var(--akchat-surface-3);
+}
+
+/* Keyboard navigation: match the hover wash; the global outline ring
+   stays on :focus-visible, inset so it is not clipped by the menu edge. */
+.ankurah-chat .contextMenuItem:focus-visible, .ankurah-chat.contextMenuItem:focus-visible {
+  background-color: var(--akchat-surface-3);
+  outline-offset: -2px;
+}
+
+.ankurah-chat .contextMenuItemDanger, .ankurah-chat.contextMenuItemDanger {
+  color: var(--akchat-danger);
+}
+
+.ankurah-chat .contextMenuItemDanger svg, .ankurah-chat.contextMenuItemDanger svg {
+  color: var(--akchat-danger);
+}
+
+.ankurah-chat .contextMenuItemDanger:hover, .ankurah-chat.contextMenuItemDanger:hover {
+  background-color: var(--akchat-danger-bg);
+}
