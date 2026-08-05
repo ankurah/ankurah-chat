@@ -1,0 +1,298 @@
+/* Composer — pill input plus primary send. */
+
+.ankurah-chat .inputContainer, .ankurah-chat.inputContainer {
+  position: relative; /* anchors the mention popup (#18) */
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--akchat-sp-2);
+  padding: var(--akchat-sp-3) var(--akchat-sp-4) 14px;
+  background-color: var(--akchat-surface);
+  border-top: 1px solid var(--akchat-border);
+}
+
+/* Mention autocomplete (#18) ------------------------------------------------ */
+
+.ankurah-chat .mentionPopup, .ankurah-chat.mentionPopup {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: var(--akchat-sp-4);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 240px;
+  max-width: min(380px, calc(100% - var(--akchat-sp-4) * 2));
+  max-height: 264px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--akchat-surface);
+  border: 1px solid var(--akchat-border);
+  border-radius: var(--akchat-r-md);
+  box-shadow: var(--akchat-shadow-2);
+}
+
+.ankurah-chat .mentionItem, .ankurah-chat.mentionItem {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 9px;
+  text-align: left;
+  font-size: var(--akchat-fs-md);
+  font-weight: 550;
+  color: var(--akchat-text);
+  border-radius: 7px;
+}
+
+.ankurah-chat .mentionItem:hover, .ankurah-chat.mentionItem:hover {
+  background: var(--akchat-surface-2);
+}
+
+/* Keyboard selection: the arrow-key cursor (mouseenter follows it). */
+.ankurah-chat .mentionItem.active, .ankurah-chat.mentionItem.active {
+  background: var(--akchat-surface-3);
+}
+
+.ankurah-chat .mentionName, .ankurah-chat.mentionName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ankurah-chat .mentionAvatar, .ankurah-chat.mentionAvatar {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  font-size: 9.5px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+  border-radius: 7px;
+  user-select: none;
+}
+
+/* Emoji autocomplete (#54): shares the mention popup shell; the glyph sits
+   where the avatar would. */
+.ankurah-chat .emojiGlyph, .ankurah-chat.emojiGlyph {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 22px;
+  font-size: 16px;
+  user-select: none;
+}
+
+.ankurah-chat .mentionAvatar.hue-0, .ankurah-chat.mentionAvatar.hue-0 { background: var(--akchat-hue-0); }
+.ankurah-chat .mentionAvatar.hue-1, .ankurah-chat.mentionAvatar.hue-1 { background: var(--akchat-hue-1); }
+.ankurah-chat .mentionAvatar.hue-2, .ankurah-chat.mentionAvatar.hue-2 { background: var(--akchat-hue-2); }
+.ankurah-chat .mentionAvatar.hue-3, .ankurah-chat.mentionAvatar.hue-3 { background: var(--akchat-hue-3); }
+.ankurah-chat .mentionAvatar.hue-4, .ankurah-chat.mentionAvatar.hue-4 { background: var(--akchat-hue-4); }
+.ankurah-chat .mentionAvatar.hue-5, .ankurah-chat.mentionAvatar.hue-5 { background: var(--akchat-hue-5); }
+.ankurah-chat .mentionAvatar.hue-6, .ankurah-chat.mentionAvatar.hue-6 { background: var(--akchat-hue-6); }
+.ankurah-chat .mentionAvatar.hue-7, .ankurah-chat.mentionAvatar.hue-7 { background: var(--akchat-hue-7); }
+
+/* Reply chip (#23): pinned above the input while a reply is armed. */
+
+.ankurah-chat .replyingNotice, .ankurah-chat.replyingNotice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 12px;
+  font-size: var(--akchat-fs-sm);
+  color: var(--akchat-text-2);
+  background: var(--akchat-surface-3);
+  border-radius: var(--akchat-r-md);
+}
+
+.ankurah-chat .replyingNotice svg, .ankurah-chat.replyingNotice svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--akchat-link);
+}
+
+.ankurah-chat .replyingNoticeLabel, .ankurah-chat.replyingNoticeLabel {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--akchat-link);
+}
+
+.ankurah-chat .replyingNoticeSnippet, .ankurah-chat.replyingNoticeSnippet {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ankurah-chat .replyingNoticeCancel, .ankurah-chat.replyingNoticeCancel {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--akchat-text-3);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ankurah-chat .replyingNoticeCancel:hover, .ankurah-chat.replyingNoticeCancel:hover {
+  color: var(--akchat-text);
+  background: var(--akchat-surface-2);
+}
+
+.ankurah-chat .editingNotice, .ankurah-chat.editingNotice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  font-size: var(--akchat-fs-sm);
+  font-weight: 600;
+  color: var(--akchat-link);
+  background: var(--akchat-surface-3);
+  border-radius: var(--akchat-r-md);
+}
+
+.ankurah-chat .editingNotice svg, .ankurah-chat.editingNotice svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.ankurah-chat .editingNoticeHint, .ankurah-chat.editingNoticeHint {
+  margin-left: auto;
+  font-weight: 500;
+  color: var(--akchat-text-3);
+}
+
+.ankurah-chat .editingNoticeHint kbd, .ankurah-chat.editingNoticeHint kbd {
+  padding: 1px 5px;
+  font-family: var(--akchat-font-mono);
+  font-size: 10.5px;
+  color: var(--akchat-text-2);
+  background: var(--akchat-surface);
+  border: 1px solid var(--akchat-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+}
+
+.ankurah-chat .inputRow, .ankurah-chat.inputRow {
+  display: flex;
+  gap: var(--akchat-sp-2);
+  /* The composer grows upward (#50); buttons stay pinned to its bottom line. */
+  align-items: flex-end;
+}
+
+/* The composer textarea (#50): collapsed it reads as the original pill;
+   grown it becomes a rounded rect. Height is driven by the autosize JS
+   (message_input.rs); max-height here is defense in depth. */
+.ankurah-chat .input, .ankurah-chat.input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 18px;
+  font-size: var(--akchat-fs-base);
+  line-height: 21px;
+  font-family: inherit;
+  color: var(--akchat-text);
+  background-color: var(--akchat-surface-2);
+  border: 1px solid var(--akchat-border);
+  border-radius: 21px;
+  outline: none;
+  resize: none;
+  overflow-y: hidden;
+  max-height: 192px; /* keep in sync with MAX_COMPOSER_HEIGHT */
+  transition:
+    border-color var(--akchat-t-fast) var(--akchat-ease),
+    box-shadow var(--akchat-t-fast) var(--akchat-ease),
+    background-color var(--akchat-t-fast) var(--akchat-ease);
+}
+
+.ankurah-chat .input::placeholder, .ankurah-chat.input::placeholder {
+  color: var(--akchat-text-faint);
+}
+
+.ankurah-chat .input:focus, .ankurah-chat.input:focus {
+  border-color: var(--akchat-link);
+  background-color: var(--akchat-surface);
+  box-shadow: 0 0 0 3px rgb(42 111 104 / 14%);
+}
+
+.ankurah-chat .input:disabled, .ankurah-chat.input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ankurah-chat .button, .ankurah-chat.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 42px;
+  padding: 0 var(--akchat-sp-5);
+  flex-shrink: 0;
+  background-color: var(--akchat-primary);
+  color: var(--akchat-on-primary);
+  border: 1px solid transparent;
+  border-radius: var(--akchat-r-full);
+  font-size: var(--akchat-fs-md);
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background-color var(--akchat-t-fast) var(--akchat-ease),
+    color var(--akchat-t-fast) var(--akchat-ease),
+    opacity var(--akchat-t-fast) var(--akchat-ease);
+}
+
+.ankurah-chat .button:hover, .ankurah-chat.button:hover {
+  background-color: var(--akchat-primary-hover);
+}
+
+.ankurah-chat .button:active, .ankurah-chat.button:active {
+  background-color: var(--akchat-primary-active);
+}
+
+.ankurah-chat .button:disabled, .ankurah-chat.button:disabled {
+  background-color: var(--akchat-border-strong);
+  color: var(--akchat-text-3);
+  cursor: not-allowed;
+}
+
+.ankurah-chat .buttonGhost, .ankurah-chat.buttonGhost {
+  background-color: transparent;
+  color: var(--akchat-text-2);
+  border-color: var(--akchat-border-strong);
+}
+
+.ankurah-chat .buttonGhost:hover, .ankurah-chat.buttonGhost:hover {
+  background-color: var(--akchat-surface-3);
+  color: var(--akchat-text);
+}
+
+.ankurah-chat .buttonGhost:active, .ankurah-chat.buttonGhost:active {
+  background-color: var(--akchat-surface-3);
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .ankurah-chat .inputContainer, .ankurah-chat.inputContainer {
+    padding: var(--akchat-sp-2) var(--akchat-sp-3) var(--akchat-sp-3);
+  }
+
+  .ankurah-chat .input, .ankurah-chat.input {
+    padding: 10px 14px;
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  .ankurah-chat .button, .ankurah-chat.button {
+    min-height: 40px;
+    padding: 0 var(--akchat-sp-4);
+    font-size: var(--akchat-fs-sm);
+  }
+}

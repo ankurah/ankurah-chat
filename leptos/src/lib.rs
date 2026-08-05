@@ -67,7 +67,9 @@
 //! knows nothing about that host's inspector. Bubbles also carry `data-msg-id`,
 //! which is what the scroll pane finds visible rows by.
 
+mod composer;
 pub mod context;
+mod dm;
 pub mod emoji;
 pub mod fmt;
 mod grouping;
@@ -82,7 +84,12 @@ mod reactions;
 mod scroll_pane;
 mod styles;
 
+pub use composer::{Composer, ComposerTarget};
 pub use context::{ChatContext, ChatContextBuilder, ChatHooks, MessageSlot, ModeratorDelete, Session};
+pub use dm::{
+    conversations, converge_selection, display_name, open_thread_with, pair_rows, partner_of, send_dm, threads_query,
+    Conversation, DmReadStateManager, DmSidebar, DmThread,
+};
 pub use message_list::MessageList;
 pub use message_row::MessageRow;
 pub use reactions::REACTION_EMOJIS;

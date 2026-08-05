@@ -25,6 +25,8 @@ pub const STYLES: &str = concat!(
     include_str!("styles/markdown.css"),
     include_str!("styles/reactions.css"),
     include_str!("styles/context_menu.css"),
+    include_str!("styles/composer.css"),
+    include_str!("styles/direct_messages.css"),
 );
 
 /// The `id` on the injected element, which is also how a second call knows
