@@ -87,6 +87,31 @@ Which rooms exist is the one predicate a host owns, and it is declared as data:
 `ChatContext::new(ctx).rooms_where("name = 'general'")`. It scopes the selector
 and the unread windows together.
 
+### On your side
+
+- **Adopt the pin family above.** ankurah-signals 0.9.0 holds js-sys/web-sys at
+  =0.3.82, and leptos 0.8.15+ demands ^0.3.85 through server_fn → wasm-streams.
+  The two cannot both be satisfied; raise both ends together or neither.
+- **Name a getrandom backend.** ankurah reaches getrandom transitively for
+  entity ids, and it refuses `wasm32-unknown-unknown` until something names a
+  backend. These crates declare the `wasm_js` feature for 0.3 and `js` for 0.2
+  on wasm targets, which is what the resolved versions need — but a
+  `.cargo/config.toml` does **not** travel with a dependency, so the
+  `getrandom_backend="wasm_js"` rustflag this repo sets for its own wasm checks
+  is not something you inherit. If your resolve lands on an early 0.3.x that
+  wants the cfg, set it in your own workspace:
+
+  ```toml
+  # <your workspace>/.cargo/config.toml
+  [target.wasm32-unknown-unknown]
+  rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
+  ```
+
+  (community does exactly this, in `leptos-app/.cargo/config.toml`.)
+- **Do not pass a `wasm` feature** — there isn't one. `ankurah/wasm` is enabled
+  by target, because no wasm build would want it off and forgetting it produces
+  a confusing failure deep inside ankurah-core.
+
 ### Theming
 
 Every colour and metric is an `--akchat-*` custom property. Re-declare the ones
@@ -120,6 +145,17 @@ One thing does not survive: the timeline's loaded window. A `ScrollManager`
 takes its context at construction and ankurah-virtual-scroll 0.9.0 cannot
 re-point one, so the pane rebuilds and the reader lands at the live tail rather
 than wherever they had paged back to.
+
+The reader may CHANGE, not merely appear — signing in as somebody else is a
+legitimate swap. What the previous reader had selected stays in your signals,
+because those are yours; every write revalidates its author against the session
+before committing, and a conversation whose two ends have become the same
+person is refused rather than written.
+
+Handles the accessors give you (`chat.members()`, `chat.rooms()`, the cursor
+managers) are BORROWS of the session's, not things to park. Keep one past a
+swap and it goes on reading through a context the reader has left. Ask again;
+it is a cache lookup.
 
 If you would RATHER discard everything on sign-in — draft included — key the
 subtree on `chat.generation()` and Leptos will remount it for you. Both models

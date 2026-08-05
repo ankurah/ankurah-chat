@@ -107,8 +107,6 @@ pub use dm::{
     conversations, display_name, open_thread_with, pair_rows, partner_of, send_dm, Conversation, DmConversation,
     DmSidebar,
 };
-pub use message_list::MessageList;
-pub use message_row::MessageRow;
 pub use read_state::ReadStateManager;
 pub use reactions::REACTION_EMOJIS;
 pub use room_log::RoomLog;

@@ -172,27 +172,25 @@ pub struct ChatContext(SendWrapper<Arc<Inner>>);
 /// owner, one lifetime, one rebuild.
 #[derive(Default)]
 struct Shared {
-    /// The generation these were built against. A read for a newer one clears
-    /// the lot first — which is what drops the old queries and lets the old
-    /// cursor managers die (their subscriptions hold only weak handles back,
-    /// precisely so that dropping the manager is enough).
+    /// The generation these were built against. Anything found here for an
+    /// older one is taken out and dropped — which is what ends the old
+    /// queries, and lets the old cursor managers die (their subscriptions hold
+    /// only weak handles back, precisely so that dropping is enough).
     built_for: u64,
-    members: Option<(LiveQuery<UserView>, QueryRegistration)>,
-    reactions: Option<(LiveQuery<ReactionView>, QueryRegistration)>,
-    rooms: Option<(LiveQuery<RoomView>, QueryRegistration)>,
-    dm_threads: Option<(LiveQuery<DmThreadView>, QueryRegistration)>,
+    members: Option<QuerySlot<UserView>>,
+    reactions: Option<QuerySlot<ReactionView>>,
+    rooms: Option<QuerySlot<RoomView>>,
+    dm_threads: Option<QuerySlot<DmThreadView>>,
     room_cursors: Option<ReadStateManager>,
     dm_cursors: Option<DmReadStateManager>,
 }
 
-impl Shared {
-    /// Throw away anything built for an older session.
-    fn reset_if_stale(&mut self, generation: u64) {
-        if self.built_for != generation {
-            *self = Shared { built_for: generation, ..Shared::default() };
-        }
-    }
-}
+/// A cached query, and its registration ONCE IT HAS ONE.
+///
+/// The registration is separate and late because the order matters: the query
+/// is published into the cache first, and only then announced to whatever
+/// observer the host attached. See [`ChatContext::shared_query`].
+type QuerySlot<R> = (LiveQuery<R>, Option<QueryRegistration>);
 
 struct Inner {
     session: ArcRwSignal<SendWrapper<Session>>,
@@ -241,9 +239,25 @@ impl ChatContext {
 
     /// Point the mounted components at a different ankurah context, reader, or
     /// both — the sign-in path. Queries re-point in place; nothing unmounts.
+    ///
+    /// THIS IS ALSO THE DISPOSAL POINT. Everything the handshake built for the
+    /// old session is dropped here rather than on the next accessor call, so a
+    /// surface that has since unmounted cannot leave a cursor manager alive
+    /// with live subscriptions — and, on the conversation side, still writing
+    /// cursor repairs through a context the reader has left. The accessors
+    /// discard stale state too, but as belt: nobody has to read anything for
+    /// the old session to end.
+    ///
+    /// The reader may CHANGE, not merely appear: signing in as somebody else
+    /// is a legitimate swap, and it leaves whatever the previous reader had
+    /// selected in the host's own signals. Every write revalidates its author
+    /// against the session before committing (see [`WriteSession`]), and the
+    /// direct-message paths additionally refuse a conversation whose two ends
+    /// have become the same person.
     pub fn set_session(&self, context: Context, viewer: Option<EntityId>) {
         self.0.session.set(SendWrapper::new(Session { context, viewer }));
         self.0.generation.update(|n| *n += 1);
+        self.discard_stale(self.0.generation.get_untracked());
     }
 
     /// Which session this is, counting from zero. Tracked.
@@ -256,147 +270,6 @@ impl ChatContext {
 
     /// Which session this is, without subscribing.
     pub fn generation_untracked(&self) -> u64 { self.0.generation.get_untracked() }
-
-    /// Every member, live — for author names, mention rendering and the
-    /// composer's autocomplete.
-    ///
-    /// Built here rather than by a host and rather than per component: every
-    /// surface wants the same rows, the timelines remount whenever the reader
-    /// changes room, and a query per mount would mean a registration per mount.
-    /// Reading this SUBSCRIBES to the session, so a caller re-runs and gets the
-    /// rebuilt query when the reader signs in.
-    ///
-    /// `None` only if the query could not be created, which is logged; a
-    /// surface without it shows ids instead of names rather than failing.
-    pub fn members(&self) -> Option<LiveQuery<UserView>> {
-        let generation = self.0.generation.get();
-        if let Some(existing) = self.cached(generation, |shared| shared.members.as_ref().map(|(query, _)| query.clone())) {
-            return Some(existing);
-        }
-        // Built OUTSIDE the borrow: registering notifies whatever observer the
-        // host attached, and an observer that asked this handshake for a query
-        // would otherwise re-enter the cell.
-        let built = self.build_query("true", "members")?;
-        let mut shared = self.0.shared.borrow_mut();
-        shared.reset_if_stale(generation);
-        Some(shared.members.get_or_insert(built).0.clone())
-    }
-
-    /// Every active reaction, live.
-    ///
-    /// One standing query rather than one per row: `Reaction` carries no room
-    /// ref, so a room-scoped predicate is inexpressible, and a query per row
-    /// would churn subscriptions with every virtual-scroll mount. Here rather
-    /// than in the timeline because the timeline remounts on every room
-    /// change, and this does not have to.
-    pub fn reactions(&self) -> Option<LiveQuery<ReactionView>> {
-        let generation = self.0.generation.get();
-        if let Some(existing) = self.cached(generation, |shared| shared.reactions.as_ref().map(|(query, _)| query.clone())) {
-            return Some(existing);
-        }
-        // Built OUTSIDE the borrow: registering notifies whatever observer the
-        // host attached, and an observer that asked this handshake for a query
-        // would otherwise re-enter the cell.
-        let built = self.build_query("active = true", "reactions")?;
-        let mut shared = self.0.shared.borrow_mut();
-        shared.reset_if_stale(generation);
-        Some(shared.reactions.get_or_insert(built).0.clone())
-    }
-
-    /// The rooms this deployment offers, live — the set the host declared with
-    /// [`ChatContextBuilder::rooms_where`], or all of them.
-    pub fn rooms(&self) -> Option<LiveQuery<RoomView>> {
-        let generation = self.0.generation.get();
-        if let Some(existing) = self.cached(generation, |shared| shared.rooms.as_ref().map(|(query, _)| query.clone())) {
-            return Some(existing);
-        }
-        let predicate = format!("{} ORDER BY name ASC", self.0.rooms_where);
-        let built = self.build_query(&predicate, "rooms")?;
-        let mut shared = self.0.shared.borrow_mut();
-        shared.reset_if_stale(generation);
-        Some(shared.rooms.get_or_insert(built).0.clone())
-    }
-
-    /// The reader's own conversations, live.
-    ///
-    /// Self-shaping where a deployment scopes `dmthread` reads to its
-    /// participants: a plain `deleted = false` returns exactly the reader's
-    /// own. There is no client-side membership filter on purpose — one would
-    /// read as though the privacy came from here, and it comes from the
-    /// server's policy.
-    pub fn dm_threads(&self) -> Option<LiveQuery<DmThreadView>> {
-        let generation = self.0.generation.get();
-        if let Some(existing) = self.cached(generation, |shared| shared.dm_threads.as_ref().map(|(query, _)| query.clone())) {
-            return Some(existing);
-        }
-        // Built OUTSIDE the borrow: registering notifies whatever observer the
-        // host attached, and an observer that asked this handshake for a query
-        // would otherwise re-enter the cell.
-        let built = self.build_query("deleted = false", "dm threads")?;
-        let mut shared = self.0.shared.borrow_mut();
-        shared.reset_if_stale(generation);
-        Some(shared.dm_threads.get_or_insert(built).0.clone())
-    }
-
-    /// The reader's per-room read cursors, and the unread counts they drive.
-    ///
-    /// One manager for the whole handshake, deliberately: the rail draws the
-    /// badge and the log advances the cursor, and two managers would mean the
-    /// badge cleared on a server round trip instead of the moment the reader
-    /// reached the bottom. `None` for an anonymous reader, who has no cursors.
-    pub fn room_cursors(&self) -> Option<ReadStateManager> {
-        let generation = self.0.generation.get();
-        if let Some(existing) = self.cached(generation, |shared| shared.room_cursors.clone()) {
-            return Some(existing);
-        }
-        // Built outside the borrow: `rooms()` takes it too.
-        let rooms = self.rooms()?;
-        let viewer = self.viewer_untracked()?;
-        let manager = ReadStateManager::try_new(self.context_untracked(), rooms, viewer)?;
-        let mut shared = self.0.shared.borrow_mut();
-        shared.reset_if_stale(generation);
-        Some(shared.room_cursors.get_or_insert(manager).clone())
-    }
-
-    /// The reader's per-conversation read cursors. `None` for an anonymous
-    /// reader; see [`Self::room_cursors`] for why there is exactly one.
-    pub fn dm_cursors(&self) -> Option<DmReadStateManager> {
-        let generation = self.0.generation.get();
-        if let Some(existing) = self.cached(generation, |shared| shared.dm_cursors.clone()) {
-            return Some(existing);
-        }
-        let threads = self.dm_threads()?;
-        let viewer = self.viewer_untracked()?;
-        let manager = DmReadStateManager::try_new(self.context_untracked(), threads, viewer)?;
-        let mut shared = self.0.shared.borrow_mut();
-        shared.reset_if_stale(generation);
-        Some(shared.dm_cursors.get_or_insert(manager).clone())
-    }
-
-    /// Read one already-built handle for this generation, if there is one.
-    fn cached<T>(&self, generation: u64, pick: impl Fn(&Shared) -> Option<T>) -> Option<T> {
-        let mut shared = self.0.shared.borrow_mut();
-        shared.reset_if_stale(generation);
-        pick(&shared)
-    }
-
-    /// Build one of the shared queries and register it under `label`, so a
-    /// host's attached observer sees the whole inventory. A failure is logged
-    /// and becomes `None` rather than a panic: a surface degrades better than
-    /// a page disappears.
-    fn build_query<R>(&self, predicate: &str, label: &str) -> Option<(LiveQuery<R>, QueryRegistration)>
-    where R: View + Clone + Send + Sync + 'static {
-        match self.context_untracked().query::<R>(predicate) {
-            Ok(query) => {
-                let registration = query_registry::register(label, &query);
-                Some((query, registration))
-            }
-            Err(e) => {
-                tracing::error!("Failed to create the shared {} LiveQuery: {:?}", label, e);
-                None
-            }
-        }
-    }
 
     /// The ankurah context to read and write through. Reading this in an
     /// `Effect` or a `Memo` is what makes a query re-point when the host
@@ -453,6 +326,312 @@ impl ChatContext {
     pub fn can_moderate(&self) -> bool { (self.0.can_moderate)() }
 
     pub(crate) fn hooks(&self) -> &ChatHooks { &self.0.hooks }
+
+    /// Every member, live — for author names, mention rendering and the
+    /// composer's autocomplete.
+    ///
+    /// Built here rather than by a host and rather than per component: every
+    /// surface wants the same rows, the timelines remount whenever the reader
+    /// changes room, and a query per mount would mean a registration per mount.
+    /// Reading this SUBSCRIBES to the session, so a caller re-runs and gets the
+    /// rebuilt query when the reader signs in.
+    ///
+    /// The handle is a BORROW of the session's, not something to keep. Park it
+    /// somewhere that outlives the session and it will go on reading through a
+    /// context the reader has left. Ask again instead; it is a cache lookup.
+    ///
+    /// `None` only if the query could not be created, which is logged; a
+    /// surface without it shows ids instead of names rather than failing.
+    pub fn members(&self) -> Option<LiveQuery<UserView>> {
+        self.shared_query("true", "members", |shared| &mut shared.members)
+    }
+
+    /// Every active reaction, live.
+    ///
+    /// One standing query rather than one per row: `Reaction` carries no room
+    /// ref, so a room-scoped predicate is inexpressible, and a query per row
+    /// would churn subscriptions with every virtual-scroll mount. Here rather
+    /// than in the timeline because the timeline remounts on every room
+    /// change, and this does not have to. A borrow, like the rest — see
+    /// [`Self::members`].
+    pub fn reactions(&self) -> Option<LiveQuery<ReactionView>> {
+        self.shared_query("active = true", "reactions", |shared| &mut shared.reactions)
+    }
+
+    /// The rooms this deployment offers, live — the set the host declared with
+    /// [`ChatContextBuilder::rooms_where`], or all of them. A borrow, like the
+    /// rest — see [`Self::members`].
+    pub fn rooms(&self) -> Option<LiveQuery<RoomView>> {
+        let predicate = format!("{} ORDER BY name ASC", self.0.rooms_where);
+        self.shared_query(&predicate, "rooms", |shared| &mut shared.rooms)
+    }
+
+    /// Whether the host narrowed the room set. A curated embed is not a place
+    /// to create rooms — see [`crate::RoomSelector`].
+    pub fn rooms_narrowed(&self) -> bool { self.0.rooms_where.trim() != "true" }
+
+    /// The reader's own conversations, live.
+    ///
+    /// Self-shaping where a deployment scopes `dmthread` reads to its
+    /// participants: a plain `deleted = false` returns exactly the reader's
+    /// own. There is no client-side membership filter on purpose — one would
+    /// read as though the privacy came from here, and it comes from the
+    /// server's policy. A borrow, like the rest — see [`Self::members`].
+    pub fn dm_threads(&self) -> Option<LiveQuery<DmThreadView>> {
+        self.shared_query("deleted = false", "dm threads", |shared| &mut shared.dm_threads)
+    }
+
+    /// The reader's per-room read cursors, and the unread counts they drive.
+    ///
+    /// One manager for the whole handshake, deliberately: the rail draws the
+    /// badge and the log advances the cursor, and two managers would mean the
+    /// badge cleared on a server round trip instead of the moment the reader
+    /// reached the bottom. `None` for an anonymous reader, who has no cursors.
+    /// A borrow, like the rest — see [`Self::members`].
+    pub fn room_cursors(&self) -> Option<ReadStateManager> {
+        let mut generation = self.0.generation.get();
+        loop {
+            self.discard_stale(generation);
+            if let Some(existing) = self.peek(generation, |shared| shared.room_cursors.clone()) {
+                return Some(existing);
+            }
+            // Dependencies first, outside any borrow — `rooms()` takes it too.
+            let rooms = self.rooms()?;
+            let viewer = self.viewer_untracked()?;
+            // Those two must be from the SAME session. `rooms()` can end up
+            // running an observer, and an observer can call `set_session`; a
+            // rooms query from before that, paired with the reader from after
+            // it, would window one deployment's rooms for another's reader.
+            let Some(next) = self.crossed(generation) else {
+                let manager = ReadStateManager::try_new(self.context_untracked(), rooms, viewer)?;
+                let (published, loser) = self.publish(generation, manager, |shared| &mut shared.room_cursors);
+                drop(loser);
+                match published {
+                    Some(manager) => return Some(manager),
+                    None => {
+                        generation = self.0.generation.get_untracked();
+                        continue;
+                    }
+                }
+            };
+            generation = next;
+        }
+    }
+
+    /// The reader's per-conversation read cursors. `None` for an anonymous
+    /// reader; see [`Self::room_cursors`] for why there is exactly one, and
+    /// [`Self::members`] for why the handle is a borrow.
+    pub fn dm_cursors(&self) -> Option<DmReadStateManager> {
+        let mut generation = self.0.generation.get();
+        loop {
+            self.discard_stale(generation);
+            if let Some(existing) = self.peek(generation, |shared| shared.dm_cursors.clone()) {
+                return Some(existing);
+            }
+            let threads = self.dm_threads()?;
+            let viewer = self.viewer_untracked()?;
+            let Some(next) = self.crossed(generation) else {
+                let manager = DmReadStateManager::try_new(self.context_untracked(), threads, viewer)?;
+                let (published, loser) = self.publish(generation, manager, |shared| &mut shared.dm_cursors);
+                drop(loser);
+                match published {
+                    Some(manager) => return Some(manager),
+                    None => {
+                        generation = self.0.generation.get_untracked();
+                        continue;
+                    }
+                }
+            };
+            generation = next;
+        }
+    }
+
+    /// Build, publish and register one shared query — the mechanism the four
+    /// query accessors share, and the reason they are safe to call from inside
+    /// each other and from inside an observer's callback.
+    ///
+    /// FOUR THINGS HAVE TO HOLD AT ONCE, and they are one design rather than
+    /// four guards:
+    ///
+    /// 1. PUBLISH BEFORE NOTIFY. `query_registry::register` calls whatever
+    ///    observer the host attached, and that observer may ask this handshake
+    ///    for a query — including this one. So the built query goes into the
+    ///    cache under a short borrow FIRST; a re-entrant call then finds it
+    ///    and returns, instead of building again and recursing until the stack
+    ///    is gone. The registration is attached afterwards, which is why a
+    ///    slot holds `Option<QueryRegistration>`.
+    /// 2. NOTHING DROPS UNDER THE BORROW. Dropping a `QueryRegistration` tells
+    ///    the observers, and dropping a cursor manager can end subscriptions —
+    ///    either can re-enter. So the stale state and every losing build are
+    ///    taken OUT under the borrow and dropped after it is released.
+    /// 3. NEVER CACHE ACROSS A GENERATION. An observer can call `set_session`
+    ///    from its callback. The generation is re-read after building and
+    ///    again after registering; if it moved, what was built belongs to a
+    ///    session nobody is in, and the loop starts over against the new one.
+    /// 4. THE LOOP CANNOT SPIN. Each retry re-reads the generation, which only
+    ///    ever increases, so each pass observes a strictly newer session than
+    ///    the last. A host whose observer calls `set_session` on every single
+    ///    notification would never converge — that host is not supported, and
+    ///    nothing else can produce it.
+    fn shared_query<R>(
+        &self,
+        predicate: &str,
+        label: &'static str,
+        slot: fn(&mut Shared) -> &mut Option<QuerySlot<R>>,
+    ) -> Option<LiveQuery<R>>
+    where
+        R: View + Clone + Send + Sync + 'static,
+    {
+        // Tracked once: this read is what re-runs the caller on a swap.
+        let mut generation = self.0.generation.get();
+        loop {
+            self.discard_stale(generation);
+            if let Some(existing) = self.peek(generation, |shared| slot(shared).as_ref().map(|(query, _)| query.clone())) {
+                return Some(existing);
+            }
+
+            let query = match self.context_untracked().query::<R>(predicate) {
+                Ok(query) => query,
+                Err(e) => {
+                    tracing::error!("Failed to create the shared {} LiveQuery: {:?}", label, e);
+                    return None;
+                }
+            };
+            if let Some(next) = self.crossed(generation) {
+                generation = next;
+                continue;
+            }
+
+            // (1) Publish. A loser here means a re-entrant call got there
+            // first; (2) it is dropped after the borrow is released.
+            let (published, loser) = self.publish_query(generation, query, slot);
+            drop(loser);
+            let Some((published, ours)) = published else {
+                generation = self.0.generation.get_untracked();
+                continue;
+            };
+            if !ours {
+                return Some(published);
+            }
+
+            // Now, and only now, tell the observers.
+            let registration = query_registry::register(label, &published);
+            let orphan = self.attach_registration(generation, registration, slot);
+            drop(orphan);
+            // (3) The observer may have moved the session out from under this.
+            if let Some(next) = self.crossed(generation) {
+                generation = next;
+                continue;
+            }
+            return Some(published);
+        }
+    }
+
+    /// Take anything built for an older session OUT under the borrow, and drop
+    /// it once the borrow is gone. See rule 2 on [`Self::shared_query`].
+    fn discard_stale(&self, generation: u64) {
+        let stale = {
+            let mut shared = self.0.shared.borrow_mut();
+            if shared.built_for == generation {
+                None
+            } else {
+                Some(std::mem::replace(&mut *shared, Shared { built_for: generation, ..Shared::default() }))
+            }
+        };
+        drop(stale);
+    }
+
+    /// The current generation if it has moved past `generation`, else `None`.
+    fn crossed(&self, generation: u64) -> Option<u64> {
+        let now = self.0.generation.get_untracked();
+        (now != generation).then_some(now)
+    }
+
+    /// Read one already-built handle, if the cache is on this generation.
+    ///
+    /// Takes the borrow mutably even though it only reads: the slot accessors
+    /// are `fn(&mut Shared) -> &mut Option<_>` so that one set of pointers
+    /// serves both the read and the write, and reaching a `&mut` through a
+    /// shared borrow is not something to be clever about.
+    fn peek<T>(&self, generation: u64, pick: impl Fn(&mut Shared) -> Option<T>) -> Option<T> {
+        let mut shared = self.0.shared.borrow_mut();
+        if shared.built_for != generation {
+            return None;
+        }
+        pick(&mut shared)
+    }
+
+    /// Put a built query in the cache unless one is already there. Returns
+    /// (what the caller should use, whether the caller published it) and, for
+    /// the caller to drop AFTER the borrow, whatever lost.
+    #[allow(clippy::type_complexity)]
+    fn publish_query<R>(
+        &self,
+        generation: u64,
+        query: LiveQuery<R>,
+        slot: fn(&mut Shared) -> &mut Option<QuerySlot<R>>,
+    ) -> (Option<(LiveQuery<R>, bool)>, Option<LiveQuery<R>>)
+    where
+        R: View + Clone + Send + Sync + 'static,
+    {
+        let mut shared = self.0.shared.borrow_mut();
+        if shared.built_for != generation {
+            return (None, Some(query));
+        }
+        match slot(&mut shared) {
+            Some((existing, _)) => (Some((existing.clone(), false)), Some(query)),
+            empty => {
+                *empty = Some((query.clone(), None));
+                (Some((query, true)), None)
+            }
+        }
+    }
+
+    /// Give a published query its registration. Returns the registration to
+    /// drop after the borrow if the session moved while it was being made.
+    fn attach_registration<R>(
+        &self,
+        generation: u64,
+        registration: QueryRegistration,
+        slot: fn(&mut Shared) -> &mut Option<QuerySlot<R>>,
+    ) -> Option<QueryRegistration>
+    where
+        R: View + Clone + Send + Sync + 'static,
+    {
+        let mut shared = self.0.shared.borrow_mut();
+        if shared.built_for != generation {
+            return Some(registration);
+        }
+        match slot(&mut shared) {
+            Some((_, held)) => {
+                *held = Some(registration);
+                None
+            }
+            None => Some(registration),
+        }
+    }
+
+    /// [`Self::publish_query`] for the cursor managers, which carry no
+    /// registration.
+    fn publish<T: Clone>(
+        &self,
+        generation: u64,
+        value: T,
+        slot: fn(&mut Shared) -> &mut Option<T>,
+    ) -> (Option<T>, Option<T>) {
+        let mut shared = self.0.shared.borrow_mut();
+        if shared.built_for != generation {
+            return (None, Some(value));
+        }
+        match slot(&mut shared) {
+            Some(existing) => (Some(existing.clone()), Some(value)),
+            empty => {
+                *empty = Some(value.clone());
+                (Some(value), None)
+            }
+        }
+    }
+
 }
 
 impl ChatContextBuilder {

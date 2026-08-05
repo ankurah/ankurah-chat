@@ -1,10 +1,11 @@
 //! The list of rooms, and the affordance for making a new one.
 //!
-//! Which rooms exist is the host's to decide — it hands in the LiveQuery, so a
-//! page can offer every room, three of them, or one. Which room is SELECTED is
-//! the host's too: this component writes the signal on a click and reads it to
-//! draw the highlight, and takes no view on what should be selected first or
-//! on whether that belongs in the page's URL.
+//! Which rooms exist is the host's to decide, as data: it declares an AnkQL
+//! predicate on the handshake ([`crate::ChatContextBuilder::rooms_where`]), so
+//! a page can offer every room or exactly one. Which room is SELECTED is the
+//! host's too — this component writes the id on a click and reads it to draw
+//! the highlight, and takes no view on what should be selected first or on
+//! whether that belongs in the page's URL.
 //!
 //! Rendered as two sibling elements — a header and a scrolling list — rather
 //! than one wrapper, so a host can put them inside whatever rail it already
@@ -36,12 +37,16 @@ pub fn RoomSelector(
     on_select: Option<Callback<EntityId>>,
 ) -> impl IntoView {
     let is_creating = RwSignal::new(false);
-    // Making a room is a write, so the affordance is for a reader who is
-    // signed in. Read TRACKED, so signing in mid-visit makes it appear.
+    // Making a room needs a signed-in reader — read TRACKED, so signing in
+    // mid-visit makes the affordance appear — and a room set that is not
+    // curated. A host that narrowed `rooms_where` has said which rooms its
+    // page is about; a room created outside that predicate would vanish from
+    // this list the instant it was made, with no unread window behind it.
+    // Creating rooms belongs to the deployment's own app, not to an embed.
     let chat = chat();
     let can_create = {
         let chat = chat.clone();
-        move || chat.viewer().is_some()
+        move || chat.viewer().is_some() && !chat.rooms_narrowed()
     };
 
     view! {

@@ -80,12 +80,11 @@ struct Inner {
 /// WHY WEAK. `Inner` owns the subscription guards, and each guard owns the
 /// callback that fires it — so a callback holding a strong `Arc<Inner>` closes
 /// a cycle and the manager can never drop. That was harmless while a manager
-/// lived as long as the application. It is not harmless now that a host swaps
-/// one on sign-in: the replaced manager would stay alive with its
-/// subscriptions running, and the DM cursor-repair path would go on writing
-/// through the old session's context. A weak handle is the shape a host cannot
-/// forget to use, which is why it is here rather than in a disposal method
-/// somebody has to remember to call.
+/// lived as long as the application. It is not harmless now that the handshake
+/// replaces one on sign-in: the old manager would stay alive with its
+/// subscriptions running, and the conversation cursor-repair path would go on
+/// writing through a context the reader has left. Dropping the manager IS the
+/// disposal path, which only works if nothing inside it holds itself up.
 ///
 /// Upgrading fails exactly once — after the last `ReadStateManager` clone is
 /// gone — and the callback then has nothing to update.
@@ -100,9 +99,10 @@ struct RoomWindow {
 impl ReadStateManager {
     /// Built by the handshake, once per session, from that session's context
     /// and reader — these rows belong to one reader, so a different reader
-    /// means a different manager rather than a re-pointed one. `None` if the
-    /// cursor query cannot be created, which is logged: a rail without badges
-    /// is better than a page that will not render.
+    /// means a different manager. The handshake builds the replacement and
+    /// drops this one; a host neither constructs nor holds either. `None` if
+    /// the cursor query cannot be created, which is logged: a rail without
+    /// badges is better than a page that will not render.
     pub(crate) fn try_new(context: Context, rooms: LiveQuery<RoomView>, user_id: EntityId) -> Option<Self> {
         let selection = queries::selection("user = ?", [(&user_id).into()]).expect("static readstate selection parses");
         let read_states = match context.query::<ReadStateView>(selection) {

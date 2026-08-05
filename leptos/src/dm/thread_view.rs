@@ -27,7 +27,7 @@ use ankurah_chat_model::{DmMessageView, MessageView};
 use ankurah_signals::Get as AnkurahGet;
 
 use super::message_list::DmMessageList;
-use crate::composer::{Composer, ComposerTarget};
+use crate::composer::{ComposerTarget, WiredComposer};
 use crate::context::chat;
 use crate::dm;
 use crate::scroll_pane::ScrollPane;
@@ -183,7 +183,7 @@ pub fn DmConversation(
                             </button>
                         </Show>
 
-                        <Composer
+                        <WiredComposer
                             target=ComposerTarget::Dm { partner: current_partner }
                             editing_message=editing_message
                             replying_to=replying_to

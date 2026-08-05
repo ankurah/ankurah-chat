@@ -215,9 +215,10 @@ fn mention_candidates(users: &[UserView], query: &str) -> Vec<UserView> {
 /// Mountable on its own — a page can show a composer with no timeline above it
 /// — as long as it can say which room or thread the message goes to.
 #[component]
-pub fn Composer(
-    /// The room or DM thread this composer posts into.
+pub(crate) fn WiredComposer(
+    /// The room or conversation this composer posts into.
     target: ComposerTarget,
+    /// The message being edited, shared with the timeline that armed it.
     editing_message: RwSignal<Option<MessageView>>,
     /// The message the next send replies to, armed by the actions menu's
     /// Reply. Independent of the draft text: arming, cancelling, or sending a
@@ -606,6 +607,10 @@ pub fn Composer(
                     }
                     .await;
                     if let Err(e) = result {
+                        // Including a refusal — a conversation that became the
+                        // reader's own by a session swap, say. The draft goes
+                        // back either way: the words are the reader's, and a
+                        // refused send is not a reason to take them.
                         tracing::error!("Failed to send message: {}", e);
                         // Put the failed text back — above anything typed since,
                         // never over it — and re-arm the reply unless a new one
@@ -983,5 +988,32 @@ pub fn Composer(
                 </button>
             </div>
         </div>
+    }
+}
+
+/// The message box, on its own.
+///
+/// Everything it needs is the target: a room id, or a correspondent's id.
+/// Mount it where there is no timeline above it — a page that only offers
+/// "message me" is one composer and nothing else.
+///
+/// What a standalone composer does NOT do is edit. Editing and replying are
+/// things a reader starts FROM a message, and there is no message on screen to
+/// start from, so the state that carries them is owned here, empty, and never
+/// armed: the "Replying to …" chip never appears, Cmd/Ctrl+Up walks an empty
+/// list, and Escape has nothing to cancel. Mount [`crate::RoomLog`] to get
+/// those, which is the same component with the timeline's signals threaded in.
+#[component]
+pub fn Composer(target: ComposerTarget) -> impl IntoView {
+    let editing_message = RwSignal::new(None::<MessageView>);
+    let replying_to = RwSignal::new(None::<MessageView>);
+    let no_messages = Signal::derive(Vec::<MessageView>::new);
+    view! {
+        <WiredComposer
+            target=target
+            editing_message=editing_message
+            replying_to=replying_to
+            messages=no_messages
+        />
     }
 }

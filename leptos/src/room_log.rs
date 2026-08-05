@@ -3,7 +3,7 @@ use leptos::prelude::*;
 use ankurah::EntityId;
 use ankurah_chat_model::MessageView;
 
-use crate::composer::{Composer, ComposerTarget};
+use crate::composer::{ComposerTarget, WiredComposer};
 use crate::context::chat;
 use crate::debug_header::TimelineDebugHeader;
 use crate::message_list::MessageList;
@@ -177,7 +177,7 @@ pub fn RoomLog(
                                 </button>
                             </Show>
 
-                            <Composer
+                            <WiredComposer
                                 target=ComposerTarget::Room(current_room)
                                 editing_message=editing_message
                                 replying_to=replying_to

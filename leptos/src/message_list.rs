@@ -42,9 +42,13 @@ fn group_rows(msgs: &[MessageView], viewer: Option<String>) -> Vec<RowCtx> {
         .collect()
 }
 
-/// Message list component that displays messages grouped by author and day.
+/// The room timeline's rows, grouped by author and day.
+///
+/// Internal: it is what [`crate::RoomLog`] renders inside its scroll pane, and
+/// it takes a window of already-paged messages rather than deciding anything
+/// about which. Mounting it alone would mean owning the pane too.
 #[component]
-pub fn MessageList(
+pub(crate) fn MessageList(
     #[prop(into)] messages: Signal<Vec<MessageView>>,
     editing_message: RwSignal<Option<MessageView>>,
     /// The composer's reply state, armed from the rows' context menus.

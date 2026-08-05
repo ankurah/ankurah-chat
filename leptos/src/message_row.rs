@@ -16,13 +16,16 @@ use crate::reactions::{ReactionBar, ReactionChip};
 /// Individual message row: optional day divider, avatar gutter (others only),
 /// author/time meta on the first message of a group, and the bubble itself.
 ///
+/// Internal, like the list that renders it: a row is a row OF something, and
+/// the grouping context it takes is decided one level up.
+///
 /// Structural contract, which outside code depends on: `.messageBubble`
 /// carries `data-msg-id` (how the scroll pane finds the visible rows) plus
 /// `data-entity-id` and `data-collection` (how a host attaches an inspector of
 /// its own, without this component knowing one exists). The bubble also hosts
 /// the actions-menu handler.
 #[component]
-pub fn MessageRow(
+pub(crate) fn MessageRow(
     message: MessageView,
     /// The reader's own id, as the list resolved it from the session. Passed
     /// down rather than read again so every row in one render agrees, and so

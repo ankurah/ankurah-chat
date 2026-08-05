@@ -202,6 +202,15 @@ async fn find_or_create_thread(session: &WriteSession, partner: EntityId) -> Res
 /// author and the context are the pair the caller resolved before it deferred
 /// — see [`crate::ChatContext::write_session`].
 pub async fn send_dm(session: &WriteSession, partner: EntityId, wire_text: String) -> Result<(), Box<dyn std::error::Error>> {
+    // A conversation with oneself has no other participant to name, notify or
+    // scope a read to. `open_thread_with` refuses to start one; this refuses to
+    // write into one, because the two ends can BECOME the same person without
+    // anyone selecting that: a reader who had B open, and then signs in as B,
+    // leaves a selection naming themselves. The session moved; the selection
+    // did not.
+    if partner == session.viewer {
+        return Err("refusing to send a direct message to oneself".into());
+    }
     // The row to write into is resolved from the pair, not carried in: a
     // conversation is its two participants, and which row represents it is
     // something a first-message race can still be deciding.
