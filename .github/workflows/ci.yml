@@ -1,0 +1,38 @@
+# These structs are the wire format of live rows in every deployment that
+# links this crate, and consumers pin a git rev — so a defect here is not
+# noticed until someone bumps their pin. These two jobs close that interval:
+# whatever a pull request does, the model still builds and its invariants
+# still hold, for both the targets that consume it.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Workspace tests (native)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  wasm:
+    name: Model builds for wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      # The getrandom backend rustflag comes from the checked-in
+      # .cargo/config.toml; nothing to pass here.
+      - run: cargo check -p ankurah-chat-model --target wasm32-unknown-unknown

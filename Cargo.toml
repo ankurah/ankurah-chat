@@ -4,9 +4,12 @@ members = ["model", "leptos"]
 
 # The pin family every crate in this workspace must resolve within — the
 # ankurah 0.9.0 arrangement, exactly as community's leptos-app and the
-# ankurah-xray crate pin it. These are declared here (unused until the
-# component copy-out lands) so the constraint is executable from day one;
-# see ~/ak/x-ray/Cargo.toml for the full reasoning on each ceiling.
+# ankurah-xray crate pin it. Today only `ankurah`, `wasm-bindgen` and
+# `getrandom` have a member claiming them; the rest (`ankurah-signals`,
+# `leptos`, `leptos_macro`, `web-sys`, `js-sys`, `wasm-bindgen-futures`)
+# arrive with the components and are declared now so the constraint is
+# executable before the code that must satisfy it exists. See
+# ~/ak/x-ray/Cargo.toml for the full reasoning on each ceiling.
 #
 # - leptos 0.8.15+ pulls server_fn → wasm-streams → js-sys ^0.3.85, but
 #   js-sys/web-sys are pinned =0.3.82 by ankurah-signals 0.9.0. Raise both
@@ -15,8 +18,12 @@ members = ["model", "leptos"]
 #   0.8.14 runtime lacks while declaring compatibility.
 # - Leptos stays feature-free in libraries: csr/hydrate/ssr are the
 #   CONSUMER's choice.
+# - ankurah carries no features here, only the version. `wasm` is a per-crate
+#   opt-in because ankurah-chat-model must also build for a native server (it
+#   is what the server persists), and `wasm` pulls wasm-bindgen glue into the
+#   derive output. Members add the features they need.
 [workspace.dependencies]
-ankurah = { version = "0.9.0", features = ["wasm"] }
+ankurah = { version = "0.9.0" }
 ankurah-signals = "0.9.0"
 leptos = { version = ">=0.8.12, <=0.8.14", default-features = false }
 leptos_macro = { version = ">=0.8.12, <0.8.15" }

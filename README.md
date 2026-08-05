@@ -19,11 +19,17 @@ that want to put live chat surfaces in their own pages.
 
 ## Crates
 
-- `ankurah-chat-model` — the chat collections (Message, Room, User, …) and
-  the mention/URL scanner. **Interop constraint:** these must stay
-  collection- and wire-compatible with the community server they connect to;
-  the scanner's caps (64 KiB window, 20 mentions, 8 URLs) are a shared
-  client/server contract — change in lockstep with the server or not at all.
+- `ankurah-chat-model` — the chat collections (Message, Room, User, Reaction,
+  ReadState, and the DM trio DmThread/DmMessage/DmReadState) and the
+  mention/URL scanner. This is the ONE definition each of them: a chat server
+  and its clients both link this crate, so neither can drift from the other.
+  **Interop constraint:** ankurah derives a collection's identifier from the
+  struct name and a property's from the field name, so those names are wire
+  and are pinned by live data — a rename is a migration, never a refactor.
+  The scanner's caps (64 KiB window, 20 mentions, 8 URLs) are a shared
+  client/server contract on the same terms: change them for every consumer in
+  lockstep, or not at all. Ankurah + serde only; builds for a native server
+  and for `wasm32-unknown-unknown` alike.
 - `ankurah-chat-leptos` — the components. Themable via CSS custom-property
   tokens with neutral defaults; carries its own scoped reset and
   reduced-motion handling; designed to live small (usable down to ~320 px
@@ -38,11 +44,54 @@ The workspace resolves inside the ankurah 0.9.0 pin family (wasm-bindgen
 0.8.12–0.8.14 with leptos_macro <0.8.15). The ceilings are requirements, not
 preferences — see the workspace `Cargo.toml` comments.
 
+## Consuming this crate from a wasm app
+
+Not on crates.io yet, so depend on a git rev — an exact one, never a branch:
+these structs are the format of live rows, so the tree you compile against is
+something to choose rather than follow.
+
+```toml
+ankurah-chat-model = { git = "https://github.com/ankurah/ankurah-chat", rev = "<full sha>" }
+```
+
+Then, on your side:
+
+- **Adopt the pin family above.** ankurah-signals 0.9.0 holds js-sys/web-sys at
+  =0.3.82, and leptos 0.8.15+ demands ^0.3.85 through server_fn → wasm-streams.
+  The two cannot both be satisfied; raise both ends together or neither.
+- **Name a getrandom backend.** ankurah reaches getrandom transitively for
+  entity ids, and it refuses `wasm32-unknown-unknown` until something names a
+  backend. This crate declares the `wasm_js` feature for 0.3 and `js` for 0.2
+  on wasm targets, which is what the resolved versions need — but a
+  `.cargo/config.toml` does **not** travel with a dependency, so the
+  `getrandom_backend="wasm_js"` rustflag this repo sets for its own wasm checks
+  is not something you inherit. If your resolve lands on an early 0.3.x that
+  wants the cfg, set it in your own workspace:
+
+  ```toml
+  # <your workspace>/.cargo/config.toml
+  [target.wasm32-unknown-unknown]
+  rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
+  ```
+
+  (community does exactly this, in `leptos-app/.cargo/config.toml`.)
+- **Do not pass a `wasm` feature** — there isn't one. `ankurah/wasm` is enabled
+  by target, because no wasm build would want it off and forgetting it produces
+  a confusing failure deep inside ankurah-core.
+
 ## Status & trajectory
 
-Scaffold. The components arrive as a cleaned copy of community's (x-ray
-wiring replaced by the generic registry hook); the first consumer is the
-danielnorman.net portfolio embed. community.ankurah.org itself switches from
-its in-tree copies to this crate after ankurah grows native introspection
-(the retirement map is ankurah/community#53). Consumer requirements are
-pinned on ankurah/community#46.
+The model has landed and community.ankurah.org consumes it — the collections
+and the scanner moved OUT of community's own model crate rather than being
+copied, so no second copy of the scanner caps exists to drift. community's
+model crate keeps what is community's alone (moderation records, the
+notification inbox, the link-preview cache) and re-exports what moved.
+
+Next: the components extract to `ankurah-chat-leptos` on the same terms (a
+cleaned copy of community's, x-ray wiring replaced by the generic registry
+hook), with community as the reference consumer and the danielnorman.net
+portfolio embed as the second. Consumer requirements are pinned on
+ankurah/community#46; the wider reconvergence map is ankurah/community#53.
+
+Not published to crates.io yet: consumers pin a git rev while the API is
+still moving under dogfooding.

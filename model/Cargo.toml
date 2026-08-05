@@ -7,3 +7,45 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
+ankurah = { workspace = true, features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+
+# Building for the browser, where three things are not optional:
+#
+#   - `ankurah/wasm`. ankurah-core's task spawner calls wasm-bindgen-futures
+#     on this target and that crate only enters the graph with this feature,
+#     so a wasm build without it does not compile at all. It is NOT forwarded
+#     as a cargo feature the consumer must remember to pass, because there is
+#     no wasm build that would want it off. Deliberately `wasm` and never
+#     `react`: the React feature pulls in ankurah-signals'
+#     `#[wasm_bindgen(module = "react")]` glue, which a Leptos (or any
+#     non-React) host has no runtime for.
+#   - `wasm-bindgen`, because under `ankurah/wasm` the Model derive emits
+#     `#[wasm_bindgen]` attributes into this crate.
+#   - a randomness backend. Both getrandom lines arrive transitively through
+#     ankurah (entity ids) and both refuse wasm32-unknown-unknown until one is
+#     named. On 0.3, the `wasm_js` FEATURE named here is both necessary and
+#     sufficient — 0.3.4's backend selector reaches the wasm_js module from
+#     the feature alone. (The `getrandom_backend="wasm_js"` rustflag in this
+#     workspace's .cargo/config.toml is a separate, deliberate belt: the lock
+#     file is gitignored, so a fresh resolve can land on an early 0.3.x that
+#     wanted the cfg too, and setting it is inert once the feature is on.)
+#     0.2 — reached via ankurah's rand 0.8 — wants its own `js` feature.
+#
+# All of it is target-scoped, which keeps the browser glue off this crate's
+# own native dependency edges. It is NOT a guarantee that a native build of
+# some consuming workspace never sees `ankurah/wasm`: cargo unifies features
+# per package per target across the whole graph, so a sibling crate enabling
+# it would enable it for ankurah here too. This table simply never asks.
+#
+# The two scopes in play are deliberately different predicates: this table
+# matches `cfg(target_arch = "wasm32")` — the conventional spelling for "a
+# wasm build" — while the rustflag is keyed to the `wasm32-unknown-unknown`
+# triple, because a browser randomness backend is right for that triple and
+# not for, say, a WASI one. wasm32-unknown-unknown is the only wasm target
+# this crate is exercised on today.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ankurah = { workspace = true, features = ["derive", "wasm"] }
+wasm-bindgen = { workspace = true }
+getrandom = { workspace = true }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }

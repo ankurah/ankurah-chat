@@ -1,0 +1,20 @@
+# A randomness backend for getrandom 0.3, which reaches
+# wasm32-unknown-unknown transitively (ankurah's entity ids).
+#
+# This is belt, not the buckle. On the 0.3.4 the lock resolves to today, the
+# `wasm_js` FEATURE declared in model/Cargo.toml is enough on its own; early
+# 0.3.x releases wanted this cfg as well, and the lock file is gitignored, so
+# a fresh resolve could still land on one. Setting the cfg is inert while the
+# feature is on — and getrandom raises a compile_error if the cfg is ever set
+# without it, so the two have to travel together.
+#
+# It is also a choice this workspace makes only for itself. A .cargo/config.toml
+# does NOT travel with a crate consumed as a dependency: a downstream workspace
+# building this crate for wasm supplies its own (see the README section
+# "Consuming this crate from a wasm app").
+#
+# Scoped to the triple, not to `cfg(target_arch = "wasm32")` as the dependency
+# table in model/Cargo.toml is: a browser backend is right for this target and
+# would be wrong for a WASI one.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
