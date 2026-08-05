@@ -1,0 +1,56 @@
+/* Reaction chips under message bubbles (#14). */
+
+.ankurah-chat .reactionBar, .ankurah-chat.reactionBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  max-width: 100%;
+}
+
+.ankurah-chat .messageRow.own .reactionBar, .ankurah-chat.messageRow.own .reactionBar {
+  justify-content: flex-end;
+}
+
+.ankurah-chat .reactionChip, .ankurah-chat.reactionChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  background: var(--akchat-surface-3);
+  border: 1px solid var(--akchat-border);
+  border-radius: var(--akchat-r-full);
+  color: var(--akchat-text-2);
+  cursor: pointer;
+  transition:
+    background-color var(--akchat-t-fast) var(--akchat-ease),
+    border-color var(--akchat-t-fast) var(--akchat-ease),
+    color var(--akchat-t-fast) var(--akchat-ease);
+}
+
+.ankurah-chat .reactionChip:hover, .ankurah-chat.reactionChip:hover {
+  background: var(--akchat-surface-2);
+  border-color: var(--akchat-border-strong);
+}
+
+/* Own reaction: mint chip, readable in both themes (brand constants). */
+.ankurah-chat .reactionChip.mine, .ankurah-chat.reactionChip.mine {
+  background: var(--akchat-accent);
+  border-color: transparent;
+  color: var(--akchat-on-accent);
+}
+
+.ankurah-chat .reactionChip.mine:hover, .ankurah-chat.reactionChip.mine:hover {
+  background: var(--akchat-accent-hover);
+}
+
+.ankurah-chat .reactionEmoji, .ankurah-chat.reactionEmoji {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.ankurah-chat .reactionCount, .ankurah-chat.reactionCount {
+  font-size: var(--akchat-fs-xs);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}

@@ -9,7 +9,7 @@
 //!
 //! It lives beside the scanner rather than in one app's UI because the two
 //! halves have to move together. Encode's idea of a token is the scanner's
-//! idea of a token, restated positionally in [`token_at`]; a scanner change
+//! idea of a token, restated positionally in `token_at`; a scanner change
 //! this file did not follow would produce composer output the server no longer
 //! reads as a mention. That is the same reason the scanner's caps are a shared
 //! client/server contract — this is that contract seen from the composer's
@@ -126,7 +126,8 @@ impl MemberDirectory {
         let decoded = self.decode_unchecked(text);
         if decoded != text && self.encode(&decoded, &HashMap::new()) != text {
             // Round-trip hazard: e.g. plain-text @Name runs already in the
-            // stored message (pre-#56 or hand-typed), or one decoded name
+            // stored message (written before this codec existed, or typed by
+            // hand), or one decoded name
             // shadowing another. Raw tokens are the honest fallback.
             return text.to_string();
         }

@@ -1,0 +1,258 @@
+/* The palette, the scoped reset, and the small-container rules.
+ *
+ * Every declaration in this file and its siblings is confined to
+ * `.ankurah-chat` and what it contains, which is what lets a host page mount a
+ * chat surface without having the rest of the page restyled underneath it. The
+ * class sits on each component root; the other stylesheets carry both the
+ * "root itself" and the "inside a root" form of every selector.
+ *
+ * COLOURS AND METRICS ARE ALL --akchat-* CUSTOM PROPERTIES, and the defaults
+ * below are declared at zero specificity (`:where`). A host that wants its own
+ * look re-declares any of them on `.ankurah-chat` — one class beats none, and
+ * a declaration on the element itself beats one inherited from an ancestor, so
+ * a plain `.ankurah-chat { --akchat-bg: … }` rule anywhere in the host's CSS
+ * takes over. Nothing here reads an unprefixed variable, so a host's own
+ * `--bg` or `--text` is never consulted and never has to be renamed.
+ *
+ * The defaults are deliberately neutral greys with a single blue accent: a
+ * chat panel dropped into an unstyled page should look like a chat panel, not
+ * like some other product. */
+
+:where(.ankurah-chat) {
+  /* ---- Type ---- */
+  --akchat-font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --akchat-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  --akchat-fs-xs: 11.5px;
+  --akchat-fs-sm: 12.5px;
+  --akchat-fs-md: 13.5px;
+  --akchat-fs-base: 15px;
+
+  /* ---- Space / radius / motion ---- */
+  --akchat-sp-1: 4px;
+  --akchat-sp-2: 8px;
+  --akchat-sp-3: 12px;
+  --akchat-sp-4: 16px;
+  --akchat-sp-5: 20px;
+  --akchat-sp-6: 24px;
+  --akchat-sp-8: 40px;
+
+  --akchat-r-sm: 6px;
+  --akchat-r-md: 10px;
+  --akchat-r-lg: 14px;
+  --akchat-r-full: 999px;
+
+  --akchat-ease: cubic-bezier(0.2, 0.8, 0.4, 1);
+  --akchat-t-fast: 120ms;
+  --akchat-t-med: 200ms;
+
+  /* ---- Avatar hues, deterministic per member ---- */
+  --akchat-hue-0: #4a6fa5;
+  --akchat-hue-1: #5b7f52;
+  --akchat-hue-2: #a8703c;
+  --akchat-hue-3: #a1544f;
+  --akchat-hue-4: #74609b;
+  --akchat-hue-5: #3f7a8c;
+  --akchat-hue-6: #3f7d5c;
+  --akchat-hue-7: #86713f;
+
+  /* ---- Surfaces and text: light ---- */
+  --akchat-bg: #f5f6f7;
+  --akchat-surface: #ffffff;
+  --akchat-surface-2: #f8f9fa;
+  --akchat-surface-3: #eef0f2;
+
+  --akchat-border: #dfe2e6;
+  --akchat-border-strong: #c4c9cf;
+
+  --akchat-text: #1b1e21;
+  --akchat-text-2: #545b62;
+  --akchat-text-3: #656d75;
+  --akchat-text-dim: #6d757d;
+  --akchat-text-faint: #98a0a8;
+
+  --akchat-accent: #d6e4f7;
+  --akchat-accent-hover: #e4eefb;
+  --akchat-on-accent: #14304f;
+
+  --akchat-primary: #1f4b7a;
+  --akchat-primary-hover: #2a5f96;
+  --akchat-primary-active: #163757;
+  --akchat-on-primary: #f7fafd;
+
+  --akchat-link: #2a6099;
+  --akchat-ok: #2f7d4f;
+  --akchat-ok-dot: #7ee2a8;
+  --akchat-danger: #a43e3e;
+  --akchat-danger-bg: #ffe8e6;
+  --akchat-danger-dot: #ff9d8a;
+
+  --akchat-unread-bg: #f0b357;
+  --akchat-unread-text: #3a2a0c;
+
+  /* Chrome = the room/conversation rail, darker than the log beside it. */
+  --akchat-chrome-bg: #22303c;
+  --akchat-chrome-text: #f3f6f9;
+  --akchat-chrome-text-dim: #b3c0cb;
+  --akchat-chrome-border: rgb(255 255 255 / 12%);
+  --akchat-chrome-hover: rgb(255 255 255 / 8%);
+  --akchat-chrome-active: rgb(255 255 255 / 14%);
+  --akchat-chrome-scrollbar: rgb(255 255 255 / 22%);
+  --akchat-evergreen-deep: #16212a;
+
+  /* Message bubbles */
+  --akchat-bubble-other-bg: #ffffff;
+  --akchat-bubble-other-border: #dfe2e6;
+  --akchat-bubble-own-bg: #1f4b7a;
+  --akchat-bubble-own-text: #f7fafd;
+  --akchat-edit-ring: #4790b1;
+  --akchat-edit-glow: rgb(71 144 177 / 30%);
+
+  --akchat-scrollbar: rgb(30 44 58 / 25%);
+
+  --akchat-shadow-1: 0 1px 2px rgb(20 30 40 / 6%);
+  --akchat-shadow-2: 0 2px 10px rgb(20 30 40 / 12%);
+  --akchat-shadow-3: 0 16px 40px rgb(20 30 40 / 20%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :where(.ankurah-chat) {
+    --akchat-bg: #12161a;
+    --akchat-surface: #191f25;
+    --akchat-surface-2: #1e252c;
+    --akchat-surface-3: #242c34;
+
+    --akchat-border: #2c353d;
+    --akchat-border-strong: #414c56;
+
+    --akchat-text: #e8edf1;
+    --akchat-text-2: #b9c3cc;
+    --akchat-text-3: #94a1ab;
+    --akchat-text-dim: #8b98a3;
+    --akchat-text-faint: #737f89;
+
+    --akchat-primary: #35708f;
+    --akchat-primary-hover: #3f83a6;
+    --akchat-primary-active: #2c6079;
+    --akchat-link: #7cb8d8;
+
+    --akchat-danger-bg: #3a2220;
+    --akchat-danger: #e79a94;
+
+    --akchat-chrome-bg: #151c23;
+    --akchat-chrome-text: #e9eff4;
+    --akchat-chrome-text-dim: #9fadb9;
+    --akchat-evergreen-deep: #0f151a;
+
+    --akchat-bubble-other-bg: #1d242b;
+    --akchat-bubble-other-border: #2f3941;
+    --akchat-bubble-own-bg: #2f6a8a;
+    --akchat-bubble-own-text: #f2f8fb;
+
+    --akchat-scrollbar: rgb(255 255 255 / 18%);
+
+    --akchat-shadow-1: 0 1px 2px rgb(0 0 0 / 30%);
+    --akchat-shadow-2: 0 2px 10px rgb(0 0 0 / 40%);
+    --akchat-shadow-3: 0 16px 40px rgb(0 0 0 / 55%);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Scoped reset
+   Everything an app-wide reset would normally put on `*` and on bare `button`
+   / `a`, applied only inside a component. `:where` keeps all of it at zero
+   specificity, so a host rule of any kind still wins.
+   ------------------------------------------------------------------------ */
+
+:where(.ankurah-chat),
+:where(.ankurah-chat) *,
+:where(.ankurah-chat) *::before,
+:where(.ankurah-chat) *::after {
+  box-sizing: border-box;
+}
+
+:where(.ankurah-chat) {
+  font-family: var(--akchat-font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--akchat-text);
+  /* A chat surface in a narrow column still has to hold a message. Below this
+     the composer and the room rail stop being usable, so a host that squeezes
+     harder gets a scrollbar rather than a broken layout. */
+  min-width: 320px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+:where(.ankurah-chat) button {
+  font: inherit;
+  color: inherit;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+:where(.ankurah-chat) a {
+  color: var(--akchat-link);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+:where(.ankurah-chat) a:hover {
+  text-decoration: underline;
+}
+
+:where(.ankurah-chat) input,
+:where(.ankurah-chat) textarea {
+  -webkit-user-select: text;
+  user-select: text;
+  touch-action: manipulation;
+}
+
+:where(.ankurah-chat) :focus-visible {
+  outline: 2px solid var(--akchat-link);
+  outline-offset: 2px;
+}
+
+:where(.ankurah-chat) :focus:not(:focus-visible) {
+  outline: none;
+}
+
+:where(.ankurah-chat) * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--akchat-scrollbar) transparent;
+}
+
+:where(.ankurah-chat) *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+:where(.ankurah-chat) *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:where(.ankurah-chat) *::-webkit-scrollbar-thumb {
+  background: var(--akchat-scrollbar);
+  border-radius: var(--akchat-r-full);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+/* A reader who has asked for less motion gets the layout without the
+   animation: the jump-to-latest flash, the menu's entrance, the sending
+   spinner. Scoped like everything else, so this does not speak for the page. */
+@media (prefers-reduced-motion: reduce) {
+  .ankurah-chat,
+  .ankurah-chat *,
+  .ankurah-chat *::before,
+  .ankurah-chat *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
