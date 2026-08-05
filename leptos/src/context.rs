@@ -473,6 +473,30 @@ impl ChatContext {
     ///    the last. A host whose observer calls `set_session` on every single
     ///    notification would never converge — that host is not supported, and
     ///    nothing else can produce it.
+    ///
+    /// THE ORDERS THIS FORBIDS, written out because nothing here is covered by
+    /// a running test — the crate is `cfg(target_arch = "wasm32")` and has no
+    /// harness, and every one of these needs a live ankurah node plus an
+    /// observer that calls back. A reader checking this code should check it
+    /// against these, one per rule above:
+    ///
+    /// 1. `members()` builds → `register` → observer calls `members()` →
+    ///    cache empty → builds → `register` → … (stack exhausted). Forbidden
+    ///    by the publish happening before the register: the second call finds
+    ///    the query. The same shape crosses kinds — `room_cursors()` →
+    ///    `rooms()` → `register` → observer calls `room_cursors()` — and is
+    ///    forbidden the same way, because `rooms()` has published by then.
+    /// 2. any accessor holds `borrow_mut` → replaces stale `Shared` → old
+    ///    `QueryRegistration` drops → `query_unregistered` → observer calls an
+    ///    accessor → `borrow_mut` panics. Forbidden by taking the stale value
+    ///    out and dropping it after the borrow ends. Same for a losing build.
+    /// 3. `members()` reads generation 4 → builds → `register` → observer
+    ///    calls `set_session` (now 5) → `members()` resumes, resets the cache
+    ///    to 4, and returns a query on a context nobody is in. Forbidden by
+    ///    re-reading the generation after building and after registering.
+    ///    Its cursor form: `rooms()` returns generation 4's rooms, the
+    ///    observer swaps, and `viewer_untracked()` answers generation 5 — a
+    ///    manager windowing one session's rooms for another's reader.
     fn shared_query<R>(
         &self,
         predicate: &str,
