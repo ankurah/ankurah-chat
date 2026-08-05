@@ -82,17 +82,39 @@ pub fn MessageList(
     // query rebuilt against the new context without this list remounting. The
     // registration guard rides in the same signal: dropping it is what tells
     // an attached observer the old query is gone.
-    let reactions = RwSignal::new(None::<SendWrapper<LiveQuery<ReactionView>>>);
+    let chat = chat();
     let reactions_registration = StoredValue::new(None::<QueryRegistration>);
-    Effect::new(move |_| match chat().context().query::<ReactionView>("active = true") {
-        Ok(query) => {
-            reactions_registration.set_value(Some(query_registry::register("reactions (message list)", &query)));
-            reactions.set(Some(SendWrapper::new(query)));
+    let build = {
+        let chat = chat.clone();
+        move || match chat.context_untracked().query::<ReactionView>("active = true") {
+            Ok(query) => {
+                reactions_registration.set_value(Some(query_registry::register("reactions (message list)", &query)));
+                Some(SendWrapper::new(query))
+            }
+            Err(e) => {
+                // Logged rather than fatal: a timeline without reaction chips
+                // is a timeline, and a panic here would take the whole page.
+                tracing::error!("Failed to create the reactions LiveQuery: {:?}", e);
+                reactions_registration.set_value(None);
+                None
+            }
         }
-        Err(e) => {
-            tracing::error!("Failed to create the reactions LiveQuery: {:?}", e);
-            reactions_registration.set_value(None);
-            reactions.set(None);
+    };
+    // Built synchronously so the FIRST frame already has the query — chips
+    // that arrive a frame late are a visible pop — and again on a session
+    // swap. The effect's first run is that same initial pass, so it skips.
+    let reactions = RwSignal::new(build());
+    let is_first_run = StoredValue::new(true);
+    Effect::new({
+        let chat = chat.clone();
+        let build = build.clone();
+        move |_| {
+            let _ = chat.context(); // tracked: this is what a session swap moves
+            if is_first_run.get_value() {
+                is_first_run.set_value(false);
+                return;
+            }
+            reactions.set(build());
         }
     });
     let viewer_id = current_user_id.clone();

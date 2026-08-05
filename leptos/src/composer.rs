@@ -250,23 +250,41 @@ pub fn Composer(
     // collection live. Held in a signal and built in an effect for the same
     // reason the message list's reactions query is — a host swapping the
     // session must not cost the reader their draft.
-    let mention_users = RwSignal::new(None::<SendWrapper<LiveQuery<UserView>>>);
     // The registration guard lives beside the query rather than inside it:
     // assigning a new one drops the old, which is what tells an attached
     // observer the previous query is gone.
     let mention_registration = StoredValue::new(None::<QueryRegistration>);
+    let build_users = {
+        let chat = chat.clone();
+        move || match chat.context_untracked().query::<UserView>("true") {
+            Ok(query) => {
+                mention_registration.set_value(Some(query_registry::register("users (composer)", &query)));
+                Some(SendWrapper::new(query))
+            }
+            Err(e) => {
+                // Logged rather than fatal: a composer without mention
+                // autocomplete still sends messages.
+                tracing::error!("Failed to create the composer's users LiveQuery: {:?}", e);
+                mention_registration.set_value(None);
+                None
+            }
+        }
+    };
+    // Built synchronously so the first keystroke can already complete a
+    // mention, and again on a session swap. The effect's first run is that
+    // same initial pass, so it skips.
+    let mention_users = RwSignal::new(build_users());
+    let users_first_run = StoredValue::new(true);
     Effect::new({
         let chat = chat.clone();
-        move |_| match chat.context().query::<UserView>("true") {
-        Ok(query) => {
-            mention_registration.set_value(Some(query_registry::register("users (composer)", &query)));
-            mention_users.set(Some(SendWrapper::new(query)));
-        }
-        Err(e) => {
-            tracing::error!("Failed to create the composer's users LiveQuery: {:?}", e);
-            mention_registration.set_value(None);
-            mention_users.set(None);
-        }
+        let build_users = build_users.clone();
+        move |_| {
+            let _ = chat.context(); // tracked: this is what a session swap moves
+            if users_first_run.get_value() {
+                users_first_run.set_value(false);
+                return;
+            }
+            mention_users.set(build_users());
         }
     });
     // The member list as of now, without subscribing — what the send and
