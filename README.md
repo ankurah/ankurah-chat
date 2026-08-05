@@ -53,7 +53,23 @@ these structs are the format of live rows, so the tree you compile against is
 something to choose rather than follow.
 
 ```toml
-ankurah-chat-model = { git = "https://github.com/ankurah/ankurah-chat", rev = "<full sha>" }
+ankurah-chat-model  = { git = "https://github.com/ankurah/ankurah-chat", rev = "<full sha>" }
+ankurah-chat-leptos = { git = "https://github.com/ankurah/ankurah-chat", rev = "<full sha>" }
+```
+
+Mounting a surface is three steps — provide the handshake, install the styles,
+mount what you want:
+
+```rust
+use ankurah_chat_leptos::{ChatContext, RoomLog, install_styles};
+
+ChatContext::new(context)              // your ankurah::Context
+    .viewer(Some(my_user_id))          // or leave it out: read-only
+    .on_auth_demand(|| start_sign_in())
+    .provide();
+install_styles();
+
+view! { <RoomLog room=selected_room current_user=me users=users read_state=cursors /> }
 ```
 
 Then, on your side:
@@ -89,11 +105,15 @@ copied, so no second copy of the scanner caps exists to drift. community's
 model crate keeps what is community's alone (moderation records, the
 notification inbox, the link-preview cache) and re-exports what moved.
 
-Next: the components extract to `ankurah-chat-leptos` on the same terms (a
-cleaned copy of community's, x-ray wiring replaced by the generic registry
-hook), with community as the reference consumer and the danielnorman.net
-portfolio embed as the second. Consumer requirements are pinned on
-ankurah/community#46; the wider reconvergence map is ankurah/community#53.
+The components followed on the same terms: extracted, not copied, with
+community consuming them as the reference embedder and the danielnorman.net
+portfolio embed as the second. The inspector wiring community's components
+carried is gone from them — every message bubble now carries `data-entity-id`
+and `data-collection`, and community's x-ray installs its own handlers over
+those, which is the end state
+[ankurah/community#53](https://github.com/ankurah/community/issues/53)
+describes. Consumer requirements are pinned on
+[ankurah/community#46](https://github.com/ankurah/community/issues/46).
 
 Not published to crates.io yet: consumers pin a git rev while the API is
 still moving under dogfooding.
