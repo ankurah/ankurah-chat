@@ -47,11 +47,13 @@
 //! # Reaching the handshake
 //!
 //! [`chat`] resolves through Leptos context, which walks the reactive owner
-//! chain — so it answers inside a component body, a `Memo` or an `Effect`, and
-//! NOT inside a `spawn_local` future (whose first poll is a microtask, by
-//! which time the body has returned) or an ankurah subscription callback
-//! (which never had an owner at all). Take the handle once where an owner
-//! exists and move a clone into whatever defers. Everything that writes should
+//! chain — so it answers inside a component body, a `Memo`, an `Effect` and an
+//! event handler (tachys captures the owner when it attaches a listener and
+//! re-enters it on invocation), and NOT inside a `spawn_local` future (whose
+//! first poll is a microtask, by which time the body has returned) or an
+//! ankurah subscription callback (which never had an owner at all). Take the
+//! handle once in the body and move a clone into whatever runs later — that
+//! way nothing depends on knowing which closure is which. Everything that writes should
 //! take a [`WriteSession`] instead, which resolves the reader and the context
 //! together and is the one place the auth demand is raised.
 
@@ -474,11 +476,13 @@ impl ChatContext {
     ///    notification would never converge — that host is not supported, and
     ///    nothing else can produce it.
     ///
-    /// THE ORDERS THIS FORBIDS, written out because nothing here is covered by
-    /// a running test — the crate is `cfg(target_arch = "wasm32")` and has no
-    /// harness, and every one of these needs a live ankurah node plus an
-    /// observer that calls back. A reader checking this code should check it
-    /// against these, one per rule above:
+    /// THE ORDERS THE FIRST THREE FORBID, written out because nothing here is
+    /// covered by a running test — the crate is `cfg(target_arch = "wasm32")`
+    /// and has no harness, and every one of these needs a live ankurah node
+    /// plus an observer that calls back. (Rule 4 has no order to give: it is a
+    /// termination property, and what it rules out is a loop that never ends
+    /// rather than an event sequence.) A reader checking this code should
+    /// check it against these:
     ///
     /// 1. `members()` builds → `register` → observer calls `members()` →
     ///    cache empty → builds → `register` → … (stack exhausted). Forbidden
@@ -551,8 +555,18 @@ impl ChatContext {
         }
     }
 
-    /// Take anything built for an older session OUT under the borrow, and drop
-    /// it once the borrow is gone. See rule 2 on [`Self::shared_query`].
+    /// Take anything built for an older session OUT under the borrow, END it,
+    /// and drop it once the borrow is gone. See rule 2 on
+    /// [`Self::shared_query`] for why nothing may drop under the borrow.
+    ///
+    /// The cursor managers are DISPOSED rather than merely dropped. Letting a
+    /// refcount decide when they stop is not enough: their background tasks
+    /// hold a strong reference for the length of a commit, and while one does,
+    /// the manager's subscriptions are all still live and its repair path can
+    /// still write through the departed session's context. `dispose` puts the
+    /// flag up and drops the guards here, so a task that wakes afterwards does
+    /// nothing. Both calls happen after the borrow is released, because
+    /// unsubscribing runs code that must not be holding it.
     fn discard_stale(&self, generation: u64) {
         let stale = {
             let mut shared = self.0.shared.borrow_mut();
@@ -562,6 +576,14 @@ impl ChatContext {
                 Some(std::mem::replace(&mut *shared, Shared { built_for: generation, ..Shared::default() }))
             }
         };
+        if let Some(stale) = &stale {
+            if let Some(cursors) = &stale.room_cursors {
+                cursors.dispose();
+            }
+            if let Some(cursors) = &stale.dm_cursors {
+                cursors.dispose();
+            }
+        }
         drop(stale);
     }
 
@@ -724,12 +746,18 @@ impl ChatContextBuilder {
     }
 }
 
-/// The handshake, from inside a component body, a `Memo` or an `Effect`.
+/// The handshake, from inside a component body, a `Memo`, an `Effect` or an
+/// event handler.
 ///
-/// ONLY FROM THOSE. It resolves through Leptos context, which walks the
-/// reactive owner chain, and a `spawn_local` future or an ankurah subscription
-/// callback has no owner to walk — see the module docs. Take the handle where
-/// an owner exists and clone it into whatever runs later.
+/// NOT from a `spawn_local` future or an ankurah subscription callback. It
+/// resolves through Leptos context, which walks the reactive owner chain: a
+/// future's first poll is a microtask, by which time the body has returned,
+/// and a reactor callback never had an owner at all. An event handler DOES
+/// carry one — tachys captures `Owner::current()` when it attaches the
+/// listener and re-enters it on invocation — so a click handler can resolve
+/// this; the crate hoists anyway, because a handler that goes on to defer
+/// cannot, and hoisting makes the whole component owner-independent by
+/// construction rather than by auditing which closure runs where.
 ///
 /// Panics when a component is mounted without a handshake above it, which is a
 /// wiring mistake rather than a runtime condition.

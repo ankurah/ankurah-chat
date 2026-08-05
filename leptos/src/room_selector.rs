@@ -49,10 +49,22 @@ pub fn RoomSelector(
         move || chat.viewer().is_some() && !chat.rooms_narrowed()
     };
 
+    // An open input outlives the affordance that opened it unless something
+    // closes it: sign out with the name half typed and the "+" disappears
+    // while the field stays, offering a write nobody can make.
+    Effect::new({
+        let can_create = can_create.clone();
+        move |_| {
+            if !can_create() {
+                is_creating.set(false);
+            }
+        }
+    });
+
     view! {
         <div class="ankurah-chat sidebarHeader">
             <span class="sidebarTitle">"Rooms"</span>
-            <Show when=can_create>
+            <Show when=can_create.clone()>
                 <button class="createRoomButton" on:click=move |_| is_creating.set(true) title="Create new room">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
                         stroke-linecap="round" aria-hidden="true">
@@ -64,7 +76,13 @@ pub fn RoomSelector(
         </div>
 
         <div class="ankurah-chat roomList">
-            <Show when=move || is_creating.get()>
+            <Show when={
+                let can_create = can_create.clone();
+                // Both conditions, not just the flag: the effect above closes
+                // this on the next tick, and the render must not offer it in
+                // between.
+                move || is_creating.get() && can_create()
+            }>
                 <NewRoomInput selected_room=selected_room on_cancel=move || is_creating.set(false) />
             </Show>
 

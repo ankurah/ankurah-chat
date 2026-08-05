@@ -27,6 +27,7 @@
 //! harmless: reads take the max across rows and edits converge on one row.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use ankurah::{changes::ChangeSet, EntityId, LiveQuery};
@@ -44,11 +45,14 @@ pub struct ReadStateManager(SendWrapper<Arc<Inner>>);
 
 struct Inner {
     /// The ankurah context this manager reads and writes through, held rather
-    /// than looked up: its subscription callbacks fire from the reactor, with
-    /// no reactive owner to resolve the handshake through, and its flush loops
-    /// run in deferred futures. Held for the manager's life, which is why a
-    /// host that swaps the session builds a new manager.
+    /// than looked up: its subscription callbacks fire from the reactor and
+    /// its flush loops from deferred futures, neither of which carries a
+    /// reactive owner for the handshake to resolve through. Held for the manager's life, which
+    /// is why the handshake builds a new manager per session.
     context: Context,
+    /// Set by [`ReadStateManager::dispose`]. Every callback and every
+    /// background task checks it before doing anything.
+    disposed: AtomicBool,
     user_id: EntityId,
     /// The user's own ReadState rows, live.
     read_states: LiveQuery<ReadStateView>,
@@ -79,15 +83,12 @@ struct Inner {
 ///
 /// WHY WEAK. `Inner` owns the subscription guards, and each guard owns the
 /// callback that fires it — so a callback holding a strong `Arc<Inner>` closes
-/// a cycle and the manager can never drop. That was harmless while a manager
-/// lived as long as the application. It is not harmless now that the handshake
-/// replaces one on sign-in: the old manager would stay alive with its
-/// subscriptions running, and the conversation cursor-repair path would go on
-/// writing through a context the reader has left. Dropping the manager IS the
-/// disposal path, which only works if nothing inside it holds itself up.
+/// a cycle and the manager could never drop at all. Weak breaks the cycle.
 ///
-/// Upgrading fails exactly once — after the last `ReadStateManager` clone is
-/// gone — and the callback then has nothing to update.
+/// Weak is NOT, on its own, disposal — see [`ReadStateManager::dispose`].
+///
+/// Upgrading fails once the last strong handle is gone, and the callback then
+/// has nothing to update.
 type WeakInner = Weak<Inner>;
 
 struct RoomWindow {
@@ -115,6 +116,7 @@ impl ReadStateManager {
 
         let inner = Arc::new(Inner {
             context,
+            disposed: AtomicBool::new(false),
             user_id,
             read_states: read_states.clone(),
             last_read: Mut::new(HashMap::new()),
@@ -132,6 +134,9 @@ impl ReadStateManager {
         let inner_for_rs: WeakInner = Arc::downgrade(&inner);
         let rs_guard = read_states.subscribe(move |_: ChangeSet<ReadStateView>| {
             let Some(inner) = inner_for_rs.upgrade() else { return };
+            if inner.disposed.load(Ordering::Relaxed) {
+                return;
+            }
             Self::rebuild_cursors(&inner);
             if !inner.ready.peek() {
                 inner.ready.set(true);
@@ -144,6 +149,9 @@ impl ReadStateManager {
         let inner_for_rooms: WeakInner = Arc::downgrade(&inner);
         let rooms_guard = rooms.subscribe(move |changeset: ChangeSet<RoomView>| {
             let Some(inner) = inner_for_rooms.upgrade() else { return };
+            if inner.disposed.load(Ordering::Relaxed) {
+                return;
+            }
             for room in changeset.appeared() {
                 Self::add_window(&inner, room);
             }
@@ -161,6 +169,40 @@ impl ReadStateManager {
         Some(Self(SendWrapper::new(inner)))
     }
 
+    /// End this manager now, rather than whenever the last reference happens
+    /// to go.
+    ///
+    /// WHY REFCOUNT DEATH WAS NOT ENOUGH. `Inner` owns the subscription guards
+    /// and the per-room windows, so those live exactly as long as `Inner` does
+    /// — and a background task holds a strong `Arc<Inner>` for its duration.
+    /// The order that breaks it:
+    ///
+    /// 1. the reader reaches the live tail, `mark_read` spawns a flush, and
+    ///    that task holds a strong reference while it awaits its commit;
+    /// 2. the surface unmounts;
+    /// 3. the host calls `set_session`, and the handshake drops this manager;
+    /// 4. the task wakes. `Inner` is still alive because the task held it, so
+    ///    every subscription is still live and the write goes through the
+    ///    context of a session the reader has left.
+    ///
+    /// So disposal is explicit. The flag goes up, and the guards and windows
+    /// are dropped HERE rather than whenever the refcount reaches zero: a task
+    /// or callback that wakes afterwards sees the flag and does nothing.
+    ///
+    /// Called by the handshake from its discard path, outside the borrow on
+    /// the cache — dropping guards runs unsubscribe code that must not be
+    /// holding it.
+    pub(crate) fn dispose(&self) {
+        let inner = &self.0;
+        inner.disposed.store(true, Ordering::Relaxed);
+        let guards = (
+            inner._read_states_guard.lock().unwrap_or_else(|e| e.into_inner()).take(),
+            inner._rooms_guard.lock().unwrap_or_else(|e| e.into_inner()).take(),
+            std::mem::take(&mut *inner.windows.lock().unwrap_or_else(|e| e.into_inner())),
+        );
+        drop(guards);
+    }
+
     /// Reactive unread count for one room's badge. Zero until the user's own
     /// read-state rows have loaded (reads track both signals).
     pub fn unread_count(&self, room_id: &str) -> usize {
@@ -176,6 +218,9 @@ impl ReadStateManager {
     /// background.
     pub fn mark_read(&self, room_id: &str, ts: i64) {
         let inner: &Arc<Inner> = &self.0;
+        if inner.disposed.load(Ordering::Relaxed) {
+            return;
+        }
         {
             let cursors = inner.last_read.peek();
             if ts <= cursors.get(room_id).copied().unwrap_or(0) {
@@ -237,6 +282,9 @@ impl ReadStateManager {
         let key_for_sub = key.clone();
         let guard = query.subscribe(move |_: ChangeSet<MessageView>| {
             let Some(inner) = inner_for_sub.upgrade() else { return };
+            if inner.disposed.load(Ordering::Relaxed) {
+                return;
+            }
             Self::recompute_room(&inner, &key_for_sub);
         });
 
@@ -280,6 +328,11 @@ impl ReadStateManager {
     /// burst of `mark_read`s collapses into one trailing write.
     async fn flush(inner: &Arc<Inner>, room_id: &str) {
         loop {
+            // Checked EVERY pass, not once: this loop awaits a commit between
+            // passes, and the session can move while it is suspended.
+            if inner.disposed.load(Ordering::Relaxed) {
+                return;
+            }
             let desired = inner.last_read.peek().get(room_id).copied().unwrap_or(0);
             let watermark = inner.flushed.lock().unwrap().get(room_id).copied().unwrap_or(0);
             if desired <= watermark {

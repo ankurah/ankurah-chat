@@ -26,6 +26,7 @@
 //! See the `DmReadState` model doc for what a deployment's policy owes that.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use ankurah::{changes::ChangeSet, EntityId, LiveQuery};
@@ -134,6 +135,10 @@ struct Inner {
     /// the subscription callbacks and flush loops here run outside the
     /// reactive system, where the handshake cannot be resolved.
     context: Context,
+    /// Set by [`DmReadStateManager::dispose`]. Checked by every callback and
+    /// every background task — and it matters more here than on the room
+    /// side, because the repair path WRITES.
+    disposed: AtomicBool,
     user_id: EntityId,
     /// The viewer's own DmReadState rows, live.
     cursors: LiveQuery<DmReadStateView>,
@@ -168,9 +173,9 @@ struct Inner {
 
 /// The manager's own handle on itself, for a callback that must not keep it
 /// alive — see [`crate::read_state`], which spells out why every subscription
-/// here holds a weak one. The stake is higher on this side: a replaced manager
-/// left alive would go on WRITING, because `heal_cursor` repairs rows through
-/// the context it was built with.
+/// here holds a weak one, and why weak alone is not disposal. The stake is
+/// higher on this side: a manager left alive would go on WRITING, because
+/// `heal_cursor` repairs rows through the context it was built with.
 type WeakInner = Weak<Inner>;
 
 struct ThreadWindow {
@@ -194,6 +199,7 @@ impl DmReadStateManager {
 
         let inner = Arc::new(Inner {
             context,
+            disposed: AtomicBool::new(false),
             user_id,
             cursors: cursors.clone(),
             last_read: Mut::new(HashMap::new()),
@@ -212,6 +218,9 @@ impl DmReadStateManager {
         let inner_for_cursors: WeakInner = Arc::downgrade(&inner);
         let cursors_guard = cursors.subscribe(move |_: ChangeSet<DmReadStateView>| {
             let Some(inner) = inner_for_cursors.upgrade() else { return };
+            if inner.disposed.load(Ordering::Relaxed) {
+                return;
+            }
             Self::rebuild_cursors(&inner);
             if !inner.ready.peek() {
                 inner.ready.set(true);
@@ -224,6 +233,9 @@ impl DmReadStateManager {
         let inner_for_threads: WeakInner = Arc::downgrade(&inner);
         let threads_guard = threads.subscribe(move |changeset: ChangeSet<DmThreadView>| {
             let Some(inner) = inner_for_threads.upgrade() else { return };
+            if inner.disposed.load(Ordering::Relaxed) {
+                return;
+            }
             for thread in changeset.appeared() {
                 Self::add_window(&inner, thread.id());
             }
@@ -249,6 +261,22 @@ impl DmReadStateManager {
         }
 
         Some(Self(SendWrapper::new(inner)))
+    }
+
+    /// End this manager now — see [`crate::read_state::ReadStateManager::dispose`]
+    /// for the order that makes refcount death insufficient. The stake here is
+    /// a write: `heal_cursor` repairs a cursor row on its own initiative, so a
+    /// repair queued before a swap would otherwise land after it, through the
+    /// departed session's context.
+    pub(crate) fn dispose(&self) {
+        let inner = &self.0;
+        inner.disposed.store(true, Ordering::Relaxed);
+        let guards = (
+            inner._cursors_guard.lock().unwrap_or_else(|e| e.into_inner()).take(),
+            inner._threads_guard.lock().unwrap_or_else(|e| e.into_inner()).take(),
+            std::mem::take(&mut *inner.windows.lock().unwrap_or_else(|e| e.into_inner())),
+        );
+        drop(guards);
     }
 
     /// Reactive unread count for one thread's badge. Zero until the viewer's
@@ -283,6 +311,9 @@ impl DmReadStateManager {
     /// to judge against (see `ceiling`).
     pub fn mark_read(&self, thread_id: &str, ts: i64) {
         let inner: &Arc<Inner> = &self.0;
+        if inner.disposed.load(Ordering::Relaxed) {
+            return;
+        }
         {
             let cursors = inner.last_read.peek();
             if ts <= cursors.get(thread_id).copied().unwrap_or(0) {
@@ -354,6 +385,12 @@ impl DmReadStateManager {
         }
         let inner = Arc::clone(inner);
         spawn_local(async move {
+            // The one place this manager writes without a reader asking, and
+            // therefore the one that most needs the check: a repair queued
+            // before a session swap must not land after it.
+            if inner.disposed.load(Ordering::Relaxed) {
+                return;
+            }
             if let Err(e) = write_cursor(&inner.context, &row, ts).await {
                 tracing::error!("Failed to repair a DM read cursor that had run past its thread ({}): {}", row_id.to_base64(), e);
             }
@@ -381,6 +418,9 @@ impl DmReadStateManager {
         let key_for_sub = key.clone();
         let guard = query.subscribe(move |_: ChangeSet<DmMessageView>| {
             let Some(inner) = inner_for_sub.upgrade() else { return };
+            if inner.disposed.load(Ordering::Relaxed) {
+                return;
+            }
             Self::recompute_thread(&inner, &key_for_sub);
         });
 
@@ -516,6 +556,11 @@ impl DmReadStateManager {
     /// burst of `mark_read`s collapses into one trailing write.
     async fn flush(inner: &Arc<Inner>, thread_id: &str) {
         loop {
+            // Every pass: this loop awaits a commit, and the session can move
+            // while it is suspended.
+            if inner.disposed.load(Ordering::Relaxed) {
+                return;
+            }
             let desired = inner.last_read.peek().get(thread_id).copied().unwrap_or(0);
             let watermark = inner.flushed.lock().unwrap().get(thread_id).copied().unwrap_or(0);
             if desired <= watermark {

@@ -45,8 +45,7 @@ pub struct ReactionChip {
 /// Reacting is a write, so an anonymous reader is sent to the host's sign-in
 /// instead: there is no row to create until we know whose reaction it is. The
 /// handshake comes in as an argument rather than being looked up here, because
-/// this is called from click handlers and resolves nothing once the future
-/// below has been deferred.
+/// the write below defers and nothing resolves inside a future.
 pub fn toggle_reaction(chat: &ChatContext, message: &MessageView, emoji: &str) {
     let Some(session) = chat.write_session() else { return };
     let me = session.viewer;
@@ -90,8 +89,8 @@ pub fn toggle_reaction(chat: &ChatContext, message: &MessageView, emoji: &str) {
 /// `chips` is empty — the caller already gates on that, but keep it safe.
 #[component]
 pub fn ReactionBar(message: MessageView, #[prop(into)] chips: Signal<Vec<ReactionChip>>) -> impl IntoView {
-    // Taken here, where a reactive owner exists, and cloned into every chip's
-    // click handler — which has none.
+    // Taken here and cloned into every chip's handler, so the deferred write
+    // behind it has the handshake already in hand.
     let chat = crate::context::chat();
     view! {
         <div class="reactionBar">

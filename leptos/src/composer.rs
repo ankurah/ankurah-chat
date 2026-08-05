@@ -231,10 +231,13 @@ pub(crate) fn WiredComposer(
     let message_input = RwSignal::new(String::new());
     let textarea_ref = NodeRef::<Textarea>::new();
 
-    // Taken once, in the body. Everything below that runs later — the keydown
-    // handler, the send, the effects — uses this clone: the handshake resolves
-    // through the reactive owner chain, and neither a DOM event nor a deferred
-    // future has one.
+    // Taken once, in the body, and cloned into everything below. Not because a
+    // handler could not resolve it — tachys re-enters the owner it captured at
+    // attach, so a click handler can — but because the send path DEFERS, and a
+    // future's first poll is a microtask with no owner at all. Hoisting makes
+    // every closure here owner-independent by construction instead of by
+    // auditing which of them happen to run where, and spares a context walk per
+    // call.
     let chat = chat();
 
     // Whether the host says the transport is up. A host with nothing to report

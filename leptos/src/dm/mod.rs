@@ -135,8 +135,8 @@ pub fn partner_of(thread: &DmThreadView, viewer: EntityId) -> Option<EntityId> {
 pub fn open_thread_with(chat: &ChatContext, partner: EntityId, selected: RwSignal<Option<EntityId>>) {
     // Opening a conversation writes a thread row, and a thread has two named
     // participants — there is nothing to write until we know who the reader
-    // is. The handshake comes in as an argument because this is called from
-    // click handlers, and is resolved here because the future below cannot.
+    // is. The handshake comes in as an argument, and the session is resolved
+    // here, because the future below cannot resolve either.
     let Some(session) = chat.write_session() else { return };
     let me = session.viewer;
     if partner == me {
