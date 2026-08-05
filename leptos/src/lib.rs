@@ -75,8 +75,10 @@ mod mentions;
 pub mod queries;
 pub mod query_registry;
 mod reactions;
+mod scroll_pane;
 mod styles;
 
 pub use context::{ChatContext, ChatContextBuilder, ChatHooks, MessageSlot, ModeratorDelete, Session};
+pub use scroll_pane::ScrollPane;
 pub use reactions::REACTION_EMOJIS;
 pub use styles::{install_styles, ChatStyles, STYLES};
