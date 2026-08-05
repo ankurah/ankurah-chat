@@ -1,0 +1,409 @@
+/* Message rows: day dividers, author groups, avatars, bubbles. */
+
+.ankurah-chat .dayDivider, .ankurah-chat.dayDivider {
+  display: flex;
+  align-items: center;
+  gap: var(--akchat-sp-3);
+  margin: 18px 4px 0;
+  color: var(--akchat-text-3);
+  font-size: var(--akchat-fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  user-select: none;
+}
+
+.ankurah-chat .dayDivider::before, .ankurah-chat.dayDivider::before,
+.ankurah-chat .dayDivider::after, .ankurah-chat.dayDivider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--akchat-border);
+}
+
+/* Row scaffolding ---------------------------------------------------------- */
+
+.ankurah-chat .messageRow, .ankurah-chat.messageRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 2px;
+  padding: 0 2px;
+  min-width: 0;
+}
+
+.ankurah-chat .messageRow.groupFirst, .ankurah-chat.messageRow.groupFirst {
+  margin-top: 14px;
+}
+
+.ankurah-chat .messageRow.own, .ankurah-chat.messageRow.own {
+  justify-content: flex-end;
+}
+
+.ankurah-chat .messageGutter, .ankurah-chat.messageGutter {
+  flex: 0 0 34px;
+  width: 34px;
+}
+
+.ankurah-chat .avatar, .ankurah-chat.avatar {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-top: 21px; /* sits beside the bubble, below the meta line */
+  font-size: 12.5px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+  border-radius: 10px;
+  user-select: none;
+}
+
+.ankurah-chat .avatar.hue-0, .ankurah-chat.avatar.hue-0 { background: var(--akchat-hue-0); }
+.ankurah-chat .avatar.hue-1, .ankurah-chat.avatar.hue-1 { background: var(--akchat-hue-1); }
+.ankurah-chat .avatar.hue-2, .ankurah-chat.avatar.hue-2 { background: var(--akchat-hue-2); }
+.ankurah-chat .avatar.hue-3, .ankurah-chat.avatar.hue-3 { background: var(--akchat-hue-3); }
+.ankurah-chat .avatar.hue-4, .ankurah-chat.avatar.hue-4 { background: var(--akchat-hue-4); }
+.ankurah-chat .avatar.hue-5, .ankurah-chat.avatar.hue-5 { background: var(--akchat-hue-5); }
+.ankurah-chat .avatar.hue-6, .ankurah-chat.avatar.hue-6 { background: var(--akchat-hue-6); }
+.ankurah-chat .avatar.hue-7, .ankurah-chat.avatar.hue-7 { background: var(--akchat-hue-7); }
+
+.ankurah-chat .messageMain, .ankurah-chat.messageMain {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  max-width: min(72%, 680px);
+}
+
+.ankurah-chat .messageRow.own .messageMain, .ankurah-chat.messageRow.own .messageMain {
+  align-items: flex-end;
+}
+
+/* Meta line (author + time) ------------------------------------------------ */
+
+.ankurah-chat .messageMeta, .ankurah-chat.messageMeta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--akchat-sp-2);
+  margin: 0 2px 3px;
+  min-width: 0;
+}
+
+.ankurah-chat .messageAuthor, .ankurah-chat.messageAuthor {
+  font-weight: 700;
+  color: var(--akchat-text);
+  font-size: var(--akchat-fs-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ankurah-chat .messageTime, .ankurah-chat.messageTime {
+  font-size: var(--akchat-fs-xs);
+  color: var(--akchat-text-faint);
+  white-space: nowrap;
+}
+
+/* Bubbles ------------------------------------------------------------------ */
+
+/* Cursor contract (#59): bubble chrome shows the default arrow, prose shows
+   the text cursor (it is selectable), and pointer appears only on genuinely
+   clickable things — links, mention chips, reaction chips, the ⋯ trigger.
+   X-ray mode's whole-bubble zoom-in cursor stays scoped to .xrayInspectable
+   (see XRay.css). */
+.ankurah-chat .messageBubble, .ankurah-chat.messageBubble {
+  position: relative; /* anchors the hover/focus actions trigger */
+  padding: 9px 13px;
+  max-width: 100%;
+  background-color: var(--akchat-bubble-other-bg);
+  border: 1px solid var(--akchat-bubble-other-border);
+  border-radius: var(--akchat-r-lg);
+  box-shadow: var(--akchat-shadow-1);
+  word-wrap: break-word;
+}
+
+/* Visible actions affordance (#16): the keyboard/hover path to the same menu
+   right-click opens. Hidden until the row is hovered or focus lands inside. */
+
+.ankurah-chat .messageActions, .ankurah-chat.messageActions {
+  position: absolute;
+  top: -10px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 21px;
+  color: var(--akchat-text-3);
+  background: var(--akchat-surface);
+  border: 1px solid var(--akchat-border);
+  border-radius: 7px;
+  box-shadow: var(--akchat-shadow-1);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--akchat-t-fast) var(--akchat-ease),
+    background-color var(--akchat-t-fast) var(--akchat-ease),
+    color var(--akchat-t-fast) var(--akchat-ease);
+}
+
+.ankurah-chat .messageRow:hover .messageActions, .ankurah-chat.messageRow:hover .messageActions,
+.ankurah-chat .messageRow:focus-within .messageActions, .ankurah-chat.messageRow:focus-within .messageActions,
+.ankurah-chat .messageActions[aria-expanded="true"], .ankurah-chat.messageActions[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.ankurah-chat .messageActions:hover, .ankurah-chat.messageActions:hover {
+  color: var(--akchat-text);
+  background: var(--akchat-surface-2);
+}
+
+.ankurah-chat .messageActions svg, .ankurah-chat.messageActions svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* The global focus ring sits over the own-bubble evergreen — use mint there
+   so the ring stays visible in both themes. */
+.ankurah-chat .messageBubble.ownMessage .messageActions:focus-visible, .ankurah-chat.messageBubble.ownMessage .messageActions:focus-visible {
+  outline-color: var(--akchat-accent);
+}
+
+/* Tighten corners between messages of the same group. */
+.ankurah-chat .messageRow:not(.own):not(.groupFirst) .messageBubble, .ankurah-chat.messageRow:not(.own):not(.groupFirst) .messageBubble {
+  border-top-left-radius: 5px;
+}
+
+.ankurah-chat .messageRow:not(.own):not(.groupLast) .messageBubble, .ankurah-chat.messageRow:not(.own):not(.groupLast) .messageBubble {
+  border-bottom-left-radius: 5px;
+}
+
+.ankurah-chat .messageRow.own:not(.groupFirst) .messageBubble, .ankurah-chat.messageRow.own:not(.groupFirst) .messageBubble {
+  border-top-right-radius: 5px;
+}
+
+.ankurah-chat .messageRow.own:not(.groupLast) .messageBubble, .ankurah-chat.messageRow.own:not(.groupLast) .messageBubble {
+  border-bottom-right-radius: 5px;
+}
+
+.ankurah-chat .messageBubble.ownMessage, .ankurah-chat.messageBubble.ownMessage {
+  background-color: var(--akchat-bubble-own-bg);
+  border-color: transparent;
+  color: var(--akchat-bubble-own-text);
+}
+
+.ankurah-chat .messageBubble.ownMessage .messageText, .ankurah-chat.messageBubble.ownMessage .messageText {
+  color: var(--akchat-bubble-own-text);
+}
+
+.ankurah-chat .messageText, .ankurah-chat.messageText {
+  color: var(--akchat-text);
+  font-size: var(--akchat-fs-base);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+
+/* Reply preview (#23): compact embed of the original, above the reply body,
+   inside the bubble. A button — clicking jumps to the original when it is
+   rendered in the timeline. */
+
+.ankurah-chat .replyPreview, .ankurah-chat.replyPreview {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0 0 6px;
+  padding: 3px 9px;
+  font-size: var(--akchat-fs-sm);
+  text-align: left;
+  color: var(--akchat-text-2);
+  background: var(--akchat-surface-3);
+  border-left: 3px solid var(--akchat-link);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.ankurah-chat .replyPreview:hover, .ankurah-chat.replyPreview:hover {
+  background: var(--akchat-surface-2);
+}
+
+.ankurah-chat .replyPreviewAuthor, .ankurah-chat.replyPreviewAuthor {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--akchat-text);
+}
+
+.ankurah-chat .replyPreviewSnippet, .ankurah-chat.replyPreviewSnippet {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ankurah-chat .replyPreviewGone, .ankurah-chat.replyPreviewGone {
+  font-style: italic;
+  color: var(--akchat-text-3);
+}
+
+/* On the evergreen own-bubble the embed flips to a translucent light chip
+   (the coEditBadge treatment). */
+.ankurah-chat .messageBubble.ownMessage .replyPreview, .ankurah-chat.messageBubble.ownMessage .replyPreview {
+  color: rgb(242 250 246 / 82%);
+  background: rgb(255 255 255 / 12%);
+  border-left-color: var(--akchat-accent);
+}
+
+.ankurah-chat .messageBubble.ownMessage .replyPreview:hover, .ankurah-chat.messageBubble.ownMessage .replyPreview:hover {
+  background: rgb(255 255 255 / 18%);
+}
+
+.ankurah-chat .messageBubble.ownMessage .replyPreviewAuthor, .ankurah-chat.messageBubble.ownMessage .replyPreviewAuthor {
+  color: var(--akchat-bubble-own-text);
+}
+
+.ankurah-chat .messageBubble.ownMessage .replyPreviewGone, .ankurah-chat.messageBubble.ownMessage .replyPreviewGone {
+  color: rgb(242 250 246 / 62%);
+}
+
+/* Jump-to-original wash (#23): plays once; the class is removed afterwards
+   (message_row.rs) so a repeat jump re-triggers it. */
+.ankurah-chat .messageBubble.replyJumpFlash, .ankurah-chat.messageBubble.replyJumpFlash {
+  animation: replyJumpFlash 1.4s var(--akchat-ease) 1;
+}
+
+@keyframes replyJumpFlash {
+  0%,
+  55% {
+    outline: 2px solid var(--akchat-unread-bg);
+    outline-offset: 1px;
+    box-shadow: 0 0 0 4px rgb(240 179 87 / 25%);
+  }
+
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: 1px;
+    box-shadow: 0 0 0 4px rgb(240 179 87 / 0%);
+  }
+}
+
+/* Tombstones (#10): deleted rows stay in the timeline, muted, content gone.
+   Applies over .ownMessage too — a removed message sheds its bubble color. */
+
+.ankurah-chat .messageBubble.tombstone, .ankurah-chat.messageBubble.tombstone,
+.ankurah-chat .messageBubble.ownMessage.tombstone, .ankurah-chat.messageBubble.ownMessage.tombstone {
+  background-color: var(--akchat-surface-3);
+  border: 1px dashed var(--akchat-border-strong);
+  box-shadow: none;
+}
+
+.ankurah-chat .tombstoneNotice, .ankurah-chat.tombstoneNotice,
+.ankurah-chat .messageBubble.ownMessage.tombstone .tombstoneNotice, .ankurah-chat.messageBubble.ownMessage.tombstone .tombstoneNotice {
+  font-style: italic;
+  font-size: var(--akchat-fs-md);
+  color: var(--akchat-text-3);
+}
+
+/* "(edited)" suffix (#11): inline after plain text, trailing line after
+   block-level markdown content. Hover shows the edit timestamp. */
+
+.ankurah-chat .messageEdited, .ankurah-chat.messageEdited {
+  margin-left: 6px;
+  font-size: var(--akchat-fs-xs);
+  color: var(--akchat-text-faint);
+  user-select: none;
+  cursor: default; /* chrome, not prose — it isn't selectable */
+}
+
+.ankurah-chat .messageBubble.ownMessage .messageEdited, .ankurah-chat.messageBubble.ownMessage .messageEdited {
+  color: rgb(242 250 246 / 60%);
+}
+
+/* Co-edit indicator (#38): a quiet inline pill after the message text, so a
+   collaborative message is recognizable at a glance in both themes. */
+
+.ankurah-chat .coEditBadge, .ankurah-chat.coEditBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 1px 7px;
+  vertical-align: 1px;
+  font-size: var(--akchat-fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--akchat-link);
+  background: var(--akchat-surface-3);
+  border: 1px solid var(--akchat-border-strong);
+  border-radius: var(--akchat-r-full);
+  user-select: none;
+  white-space: nowrap;
+  cursor: default; /* chrome, not prose — it isn't selectable */
+}
+
+.ankurah-chat .coEditBadge svg, .ankurah-chat.coEditBadge svg {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+}
+
+/* On the evergreen own-bubble the pill flips to a translucent light chip. */
+.ankurah-chat .messageBubble.ownMessage .coEditBadge, .ankurah-chat.messageBubble.ownMessage .coEditBadge {
+  color: var(--akchat-accent);
+  background: rgb(255 255 255 / 10%);
+  border-color: rgb(255 255 255 / 26%);
+}
+
+/* States (outline, not border, so layout never shifts) ---------------------- */
+
+.ankurah-chat .messageBubble.editing, .ankurah-chat.messageBubble.editing,
+.ankurah-chat .messageBubble.ownMessage.editing, .ankurah-chat.messageBubble.ownMessage.editing {
+  outline: 2px solid var(--akchat-edit-ring);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px var(--akchat-edit-glow);
+}
+
+.ankurah-chat .messageBubble.highlighted, .ankurah-chat.messageBubble.highlighted {
+  outline: 2px solid var(--akchat-unread-bg);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px rgb(240 179 87 / 25%);
+}
+
+.ankurah-chat .messageBubble.nextAnchor, .ankurah-chat.messageBubble.nextAnchor {
+  outline: 2px solid var(--akchat-link);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px rgb(42 111 104 / 20%);
+}
+
+/* Mobile ------------------------------------------------------------------- */
+
+@media (max-width: 768px) {
+  .ankurah-chat .messageMain, .ankurah-chat.messageMain {
+    max-width: 86%;
+  }
+
+  .ankurah-chat .messageGutter, .ankurah-chat.messageGutter {
+    flex-basis: 30px;
+    width: 30px;
+  }
+
+  .ankurah-chat .avatar, .ankurah-chat.avatar {
+    width: 30px;
+    height: 30px;
+    font-size: 11px;
+    border-radius: 9px;
+  }
+
+  .ankurah-chat .messageBubble, .ankurah-chat.messageBubble {
+    padding: 8px 11px;
+  }
+
+  .ankurah-chat .messageText, .ankurah-chat.messageText {
+    font-size: 14px;
+  }
+
+  .ankurah-chat .messageRow.groupFirst, .ankurah-chat.messageRow.groupFirst {
+    margin-top: 12px;
+  }
+}

@@ -21,7 +21,10 @@ use leptos::prelude::*;
 /// place it itself, instead of calling [`install_styles`].
 pub const STYLES: &str = concat!(
     include_str!("styles/theme.css"),
+    include_str!("styles/message_row.css"),
+    include_str!("styles/markdown.css"),
     include_str!("styles/reactions.css"),
+    include_str!("styles/context_menu.css"),
 );
 
 /// The `id` on the injected element, which is also how a second call knows
