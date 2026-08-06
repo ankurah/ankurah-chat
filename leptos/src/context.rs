@@ -506,8 +506,9 @@ impl ChatContext {
     /// THE MESSAGE BOX: a pointer press on the composer, a programmatic focus,
     /// text dragged onto it, or — for a session that dropped to anonymous under
     /// a caret that had already landed — a keystroke that would have changed or
-    /// sent the draft. The composer drops the focus rather than opening a
-    /// caret, and holds the box `readonly` so none of those write anything.
+    /// sent the draft, the IME-consumed ones excepted. The composer drops the
+    /// focus rather than opening a caret, and holds the box `readonly` so none
+    /// of those write anything.
     /// ONCE PER GESTURE, counted rather than timed: a double-click raises it
     /// once, and a ceremony that hands focus back on close raises it no further
     /// times at all. An anonymous reader's Tab skips the box entirely rather
@@ -516,16 +517,26 @@ impl ChatContext {
     /// covers every affordance that never touches the composer. A signed-in
     /// reader meets neither.
     ///
+    /// ONE KEYSTROKE ROUTE RAISES NOTHING, deliberately. A keydown an IME is
+    /// consuming reports "Process" or "Dead" rather than a character, and the
+    /// composer reads that as no reach for the box. A reader who was
+    /// mid-composition when the session dropped to anonymous therefore composes
+    /// on with no ceremony raised — and writes nothing either, `readonly` being
+    /// what stops the composition rather than anything here. They meet the
+    /// ceremony when they press on the box.
+    ///
     /// ONE FOCUS ROUTE COSTS A CLICK. A focus this crate did not cause and
     /// cannot attribute — your own code focusing the box, a screen reader's
     /// browse-mode activation — raises the ceremony once, and is then
     /// indistinguishable from the focus that belongs to a press already under
     /// way. So after one of those, the reader's next CLICK on the box is
     /// swallowed as that same demand's second route, and the click after it
-    /// raises. A tap is not swallowed: its focus arrives ahead of the press,
-    /// where the rule can see the new gesture. Every other route — a press, a
-    /// keystroke, a drop, arming a reply — marks itself, so whatever the reader
-    /// does next is answered.
+    /// raises. A tap whose focus arrives AHEAD of its press escapes that, the
+    /// rule seeing the new gesture in the focus; where the platform fires the
+    /// press first, refusing that press keeps the focus from happening at all
+    /// and the tap is swallowed exactly as the click is. Every other route — a
+    /// press, a keystroke, a drop, arming a reply — marks itself, so whatever
+    /// the reader does next is answered.
     ///
     /// MAKE THE CALLBACK IDEMPOTENT. A genuinely new gesture while the ceremony
     /// is already open raises it again — that is the point of the per-gesture
@@ -533,6 +544,10 @@ impl ChatContext {
     /// the swallowed click above being the single exception — so a callback that
     /// opens a second popup, or restarts a redirect, on being asked twice is the
     /// host's to make safe. Raising an already-open ceremony should be a no-op.
+    /// One more reason to hold to that if you turn `leptos/delegation` on: an
+    /// ancestor of the composer that stops its `mousedown` leaves the focus
+    /// listener counting presses rather than gestures, and a double-click there
+    /// raises twice.
     ///
     /// A host that set no callback gets a warning in the log and nothing else.
     /// It also gets no composer behaviour: taking the caret away from a reader

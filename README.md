@@ -98,24 +98,43 @@ not a gesture. The next real press raises it again.
 already open raises it again — that is what lets a reader who dismissed it get
 it back — so raising an open ceremony should be a no-op on your side.
 
-Three limits on the claim, stated plainly:
+Four limits on the claim, stated plainly:
 
 - The **down transition** is not symmetric. A session that drops to anonymous
   under a focused composer keeps its caret and whatever was already typed;
   nothing reaches back to blur it. What it loses at once is mutability — the box
   goes `readonly` — and the next keystroke that would have changed or sent the
-  draft raises the ceremony instead of doing nothing.
+  draft raises the ceremony instead of doing nothing. One keystroke deliberately
+  does not: an **IME-consumed** one, which reports `Process` or `Dead` rather
+  than a character. A reader who was mid-composition when the session dropped
+  composes on into a box that takes none of it and hears nothing, until they
+  press on the box. `readonly` is what holds that composition out of the draft,
+  not a ceremony.
 - Two focus routes stay **silent** rather than raising a second ceremony: a
   screen reader's browse-mode activation, and your own code focusing the box.
   The crate re-arms for a reader clicking Reply, because it knows that focus
   came from a click; it cannot tell either of those two apart from a focus that
   belongs to a click already under way. So once one of them has raised a
   ceremony and the reader dismissed it, the reader's next *click* on the box is
-  swallowed as well, and the click after it raises again. A tap is not
-  swallowed — its focus arrives ahead of the press, where the rule can see the
-  new gesture. No other route costs a dead click: a press, a keystroke, a drop
-  and arming a reply all mark themselves, so whatever the reader does next is
-  answered.
+  swallowed as well, and the click after it raises again. A tap escapes that
+  only where its focus arrives *ahead* of its press, which is where the rule can
+  see the new gesture; where the platform fires the press first, refusing that
+  press keeps the focus from happening at all and the tap is swallowed exactly
+  as the click is. No other route costs a dead click: a press, a keystroke, a
+  drop and arming a reply all mark themselves, so whatever the reader does next
+  is answered.
+- Turning **`leptos/delegation`** on puts every bubbling listener behind one
+  window-level listener, so an ancestor of the composer that calls
+  `stopPropagation` can keep the crate's handlers from running. `readonly` is an
+  attribute and survives that, so the box still takes no text — but the count
+  does not survive it. An ancestor that stops `mousedown` leaves the focus
+  listener carrying the rule alone, which raises once per **press** rather than
+  once per gesture: a double-click raises twice, because the click count travels
+  on `detail`, which is on the event that was stopped. Your idempotent callback
+  is what absorbs the second one. If that ancestor stops `mousedown` only some
+  of the time, the first press that does get through switches the fallback off,
+  and stopped presses after it are silent until one gets through again. Stopping
+  `pointerdown` as well leaves nothing able to tell one gesture from the next.
 - Installing **no callback** removes the composer behaviour entirely — the box
   takes focus and text as it always did, and the send is refused with a warning
   in the log rather than a ceremony.

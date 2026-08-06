@@ -264,7 +264,11 @@ fn mention_candidates(users: &[UserView], query: &str) -> Vec<UserView> {
 /// focused keeps its caret and whatever was already typed — nothing here
 /// revokes a focus that already landed — but the box stops accepting text at
 /// once, and the next keystroke that would have changed or sent the draft
-/// raises the ceremony rather than doing nothing.
+/// raises the ceremony rather than doing nothing. One keystroke deliberately
+/// does not: an IME-consumed one, reported as "Process" or "Dead" rather than a
+/// character, so a reader mid-composition when the session drops goes on
+/// composing in silence and `readonly` alone keeps it out of the draft (see
+/// `would_write_draft`).
 ///
 /// The draft holds plain `@DisplayName` text, never raw tokens: the
 /// autocomplete inserts the name, send re-encodes matching `@Name` runs to the
@@ -336,9 +340,12 @@ pub(crate) fn WiredComposer(
     // landed. What it does lose immediately is mutability: `readonly` goes on
     // in the same tick the attribute recomputes, so the next keystroke, paste,
     // drop or composition update changes nothing, and the keydown gate below
-    // turns that into the ceremony rather than into silence. Whatever was
-    // already typed stays in the draft, and the send refuses through
-    // `write_session` as it always has.
+    // turns that into the ceremony rather than into silence — for every key but
+    // the ones an IME is consuming, which stay silent on purpose, so a reader
+    // who was mid-composition when the session dropped composes on into a box
+    // that takes none of it and hears nothing until they press on it (see
+    // `would_write_draft`). Whatever was already typed stays in the draft, and
+    // the send refuses through `write_session` as it always has.
     let demand_instead_of_caret = {
         let chat = chat.clone();
         move || !chat.is_authenticated() && chat.can_demand_auth()
@@ -385,7 +392,10 @@ pub(crate) fn WiredComposer(
     //                  keys do nothing, and this turns that silence into the
     //                  ceremony. Only for keys that would have changed or sent
     //                  the draft — see `would_write_draft`; moving a caret or
-    //                  pressing Escape is not a reach for the box.
+    //                  pressing Escape is not a reach for the box, and neither,
+    //                  deliberately, is a keydown an IME is consuming. That one
+    //                  leaves the silence exactly where it was, with `readonly`
+    //                  the whole of what holds the composition out.
     //   beforeinput  — prevent_default, as the belt for every CANCELABLE
     //                  insertion route (paste, drop, a plain typed character)
     //                  should `readonly` ever be lifted or unsupported. Not the
@@ -423,12 +433,19 @@ pub(crate) fn WiredComposer(
     // table, so it attaches directly either way. And `readonly` is an
     // ATTRIBUTE, not an event — no ancestor can stop it — which is the second
     // reason the mutability boundary is not made of listeners. What such an
-    // ancestor CAN still cost is the count. With `mousedown` stopped, the
-    // surviving focus listener carries the whole rule — that is what its
-    // no-press-will-answer arm is for, below. With `pointerdown` AND
-    // `mousedown` both stopped, nothing left can tell one gesture from the
-    // next: the box takes no text either way and the first focus still demands,
-    // but the presses after it are silent for the life of the mount.
+    // ancestor CAN still cost is the count, in three shapes. With `mousedown`
+    // stopped for EVERY press, the surviving focus listener carries the rule
+    // alone — that is what its no-press-will-answer arm is for, below — at the
+    // price of counting presses rather than gestures: each press of a
+    // double-click raises, the click count riding on `detail`, which sits on
+    // the very event the ancestor stopped. With `mousedown` stopped only
+    // SOMETIMES — an overlay or a menu that covers the composer part of the
+    // time — the first press that does get through switches that arm off for
+    // good, and stopped presses after it are silent until another press gets
+    // through or the composer remounts. With `pointerdown` AND `mousedown` both
+    // stopped, nothing left can tell one gesture from the next: the first focus
+    // still demands and the presses after it are silent for the life of the
+    // mount. The box takes no text in any of the three.
     //
     // THE LATCH RULE, exactly. Three per-mount counters and two flags, no clock:
     //
@@ -548,12 +565,23 @@ pub(crate) fn WiredComposer(
     //     completed press behind the demand and suppresses. One ceremony.
     //   ANCESTOR STOPS POINTERDOWN ONLY — the press self-bumps, and every click
     //     demands.
-    //   ANCESTOR STOPS MOUSEDOWN ONLY, delegated — no press handler runs at
-    //     all, so `last_press_seq` stays None for the life of the mount and the
-    //     focus arm stays live. Each press bumps the counter at pointerdown and
-    //     its uncancelled default action focuses the box: the first focus
-    //     demands, and every focus after it finds the counter past the demand
-    //     with no press behind it, re-arms and demands. One ceremony per press.
+    //   ANCESTOR STOPS MOUSEDOWN ONLY, delegated — no press handler runs, so
+    //     `last_press_seq` stays None and the focus arm stays live. Each press
+    //     bumps the counter at pointerdown and its uncancelled default action
+    //     focuses the box: the first focus demands, and every focus after it
+    //     finds the counter past the demand with no press behind it, re-arms
+    //     and demands. ONE CEREMONY PER PRESS — the single place the rule
+    //     degrades from once per gesture, and a DOUBLE-CLICK raises twice here,
+    //     because `detail` sits on the event the ancestor stopped and no focus
+    //     can count clicks. That second raise lands on a ceremony already open,
+    //     which the host's callback is required to treat as a no-op; the only
+    //     alternative on offer is the permanent silence this arm exists to end.
+    //     TWO BOUNDS ON THE CLAIM: it holds only while NO press ever gets
+    //     through — an ancestor that stops `mousedown` intermittently switches
+    //     the arm off for good with the first press that lands, after which
+    //     stopped presses are silent until one lands again or the composer
+    //     remounts — and only while `pointerdown` still flows, since the arm
+    //     reads a counter that only pointerdown moves.
     //   CEREMONY REFOCUS, after any length of time — a focus with no press at
     //     all: no pointerdown has moved the counter since the demand, so the
     //     re-arm above cannot fire; `demand_once` finds the latch up, raises
@@ -578,10 +606,13 @@ pub(crate) fn WiredComposer(
     //     clear, because nothing can tell it apart from the ancestor-focus
     //     order above. A second such focus is silent. So is the reader's next
     //     CLICK, which brings no focus of its own with it — refusing the caret
-    //     keeps focus away entirely — and their second click demands. A TAP is
-    //     not swallowed: it brings a focus, that focus finds a counter past the
-    //     demand with no press ever recorded, and the re-arm above answers the
-    //     new gesture. That residue is documented at the focus listener and in
+    //     keeps focus away entirely — and their second click demands. A TAP
+    //     WHOSE FOCUS ARRIVES AHEAD OF ITS PRESS escapes that: the focus finds
+    //     a counter past the demand with no press ever recorded, and the re-arm
+    //     above answers the new gesture. A tap ordered the other way about does
+    //     not escape — refusing the press keeps the focus from happening at
+    //     all, so there is no focus to recognise anything, and it dies as the
+    //     click does. That residue is documented at the focus listener and in
     //     the README, and it is the only route left with a dead click in it.
     //
     // Per-mount state, so a host that keys its subtree on `chat.generation()`
@@ -709,16 +740,26 @@ pub(crate) fn WiredComposer(
             // never runs at all, the uncancelled default action focuses the
             // readonly box, and without this the first press would demand and
             // every press after it would be silent for the life of the mount.
+            // The None bounds that rescue as well as enables it: an ancestor
+            // that stops `mousedown` only some of the time gets this arm until
+            // the first press that lands, and silence on stopped presses after
+            // that one.
             //
             // WHY "EVER", rather than "not yet in this gesture": from here the
-            // second tap of a DOUBLE-tap and a fresh single tap are the same
-            // event — a pointer event carries no click count, and only the
+            // second press of a DOUBLE-click and a fresh single press are the
+            // same event — a pointer event carries no click count, and only the
             // mousedown's `detail` knows one. So wherever the press handler
             // reaches us at all, this stands aside and leaves the answering to
-            // it. That is also what makes a double raise impossible here: when
-            // this fires, `last_press_seq` is None and the re-arm has just
-            // cleared the flag, so a compatibility mousedown arriving behind it
-            // finds step 3's two conditions both met and suppresses.
+            // it, which is what holds a double-click and a double-tap to one
+            // ceremony in the ordinary world. In the stopped world there is no
+            // press handler to leave it to and the count degrades to one per
+            // PRESS: a double-click raises twice there, the second time into a
+            // ceremony already open, which the host's callback is required to
+            // absorb. What stays impossible in every world is two raises for
+            // ONE press: when this fires, `last_press_seq` is None and the
+            // re-arm has just cleared the flag, so a compatibility mousedown
+            // arriving behind it finds step 3's two conditions both met and
+            // suppresses.
             let no_press_will_answer = match demanded_in.get_value() {
                 None => false,
                 Some(raised_in) => last_press_seq.get_value().is_none() && gesture_seq.get_value() > raised_in,
@@ -1257,9 +1298,12 @@ pub(crate) fn WiredComposer(
             // dropped to anonymous under a focus that had already landed, which
             // is the one arrival none of the composer's other gates can see.
             // `readonly` has already made the key do nothing; this is what
-            // stops it being SILENT. Only for keys that would have changed or
-            // sent the draft — a caret move is not a reach for the box — and
-            // latched like every other route, so holding a key down asks once.
+            // stops it being SILENT — for the keys `would_write_draft` answers
+            // TRUE to, which is not the same set as the keys that would have
+            // written. A caret move is not a reach for the box, and an
+            // IME-consumed keydown is left silent on purpose; that function
+            // says why. Latched like every other route, so holding a key down
+            // asks once.
             if demand_instead_of_caret() && would_write_draft(&e) {
                 // Latched, not re-armed: holding a key down, or typing on into
                 // a box that has stopped accepting text, asks once. But a
