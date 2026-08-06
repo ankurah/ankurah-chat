@@ -596,6 +596,14 @@ impl ChatContext {
                     loser.dispose();
                 }
                 drop(loser);
+                // That dispose-and-drop is a re-entrancy point (rule 2: ending
+                // a manager's subscriptions can run code), so ended is re-asked
+                // before the successful return — one rule, no exceptions. The
+                // published winner under ended has already been taken out and
+                // disposed by the teardown; None is the honest answer.
+                if self.0.ended.get() {
+                    return None;
+                }
                 match published {
                     Some(manager) => return Some(manager),
                     None => {
@@ -642,6 +650,10 @@ impl ChatContext {
                     loser.dispose();
                 }
                 drop(loser);
+                // Same re-ask as `room_cursors`, same reason.
+                if self.0.ended.get() {
+                    return None;
+                }
                 match published {
                     Some(manager) => return Some(manager),
                     None => {
