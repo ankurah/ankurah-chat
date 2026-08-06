@@ -206,8 +206,9 @@ pub async fn send_dm(session: &WriteSession, partner: EntityId, wire_text: Strin
     // scope a read to. `open_thread_with` refuses to start one; this refuses to
     // write into one, because the two ends can BECOME the same person without
     // anyone selecting that: a reader who had B open, and then signs in as B,
-    // leaves a selection naming themselves. The session moved; the selection
-    // did not.
+    // leaves a selection naming themselves. When the host sets its session
+    // signal the session moves; the selection, which is the host's own, does
+    // not.
     if partner == session.viewer {
         return Err("refusing to send a direct message to oneself".into());
     }

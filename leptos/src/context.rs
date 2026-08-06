@@ -10,17 +10,29 @@
 //!
 //! A host builds one of these, calls [`ChatContextBuilder::provide`] above the
 //! components it mounts, and is done. Nothing here is required beyond the
-//! ankurah context itself: every hook is optional, and a surface with none of
+//! session signal itself: every hook is optional, and a surface with none of
 //! them set is a working read-and-write chat that simply offers fewer doors
 //! out to the rest of the application.
 //!
 //! # Signing in without remounting
 //!
-//! The session is a signal, not a value handed over once. A host may open on
-//! an anonymous context — the components render, the timeline fills, the
-//! composer refuses to send and calls the host's auth-demand callback instead
-//! — and then, once the reader signs in, call [`ChatContext::set_session`]
-//! with the authenticated context. That call is the whole of it.
+//! The session is the HOST'S OWN SIGNAL, handed in at mount and only ever read
+//! from here. A host may open on an anonymous context — the components render,
+//! the timeline fills, the composer refuses to send and calls the host's
+//! auth-demand callback instead — and then, once the reader signs in, set that
+//! signal to the authenticated context and the reader's id:
+//!
+//! ```ignore
+//! let session = RwSignal::new((anonymous_context, None));
+//! ChatContext::new(session).on_auth_demand(|| start_sign_in()).provide();
+//! // …later, when sign-in returns:
+//! session.set((authenticated_context, Some(user_id)));
+//! ```
+//!
+//! That set is the whole of it, and it is the only write path: nothing in this
+//! crate writes that signal. Both halves move together because [`Session`] is
+//! one value, so there is no instant at which the context has changed and the
+//! reader has not.
 //!
 //! Nothing unmounts, so the composer's draft, the armed reply, the selected
 //! room, the open conversation, the message being edited and any popover the
@@ -30,6 +42,19 @@
 //! rebuilt here the moment the generation moves. There is nothing for a host
 //! to co-swap and therefore no window in which half the surfaces are reading
 //! through one session and half through another.
+//!
+//! The rebuild is one tick behind the set, because it is driven by an effect.
+//! Within that tick a write that BEGAN under the departed session may still
+//! complete through it — as itself, against its own session's rows. After the
+//! tick, nothing of the old session runs again; the `Shared` cache below
+//! states the whole of what that window admits.
+//!
+//! The reader may CHANGE, not merely appear: signing in as somebody else is a
+//! legitimate swap, and it leaves whatever the previous reader had selected in
+//! the host's own signals. Every write revalidates its author against the
+//! session before committing (see [`WriteSession`]), and the direct-message
+//! paths additionally refuse a conversation whose two ends have become the
+//! same person.
 //!
 //! WHAT DOES NOT SURVIVE, stated plainly: the timeline's loaded window. A
 //! `ScrollManager` takes its context as a constructor argument and
@@ -69,15 +94,17 @@ use crate::dm::DmReadStateManager;
 use crate::query_registry::{self, QueryRegistration};
 use crate::read_state::ReadStateManager;
 
-/// Who the components are acting as, and the ankurah context they act through.
-#[derive(Clone)]
-pub struct Session {
-    pub context: Context,
-    /// The reader's own `User` entity id, or `None` for an anonymous reader.
-    /// This is what "is this my message", "did I react to this" and "who is
-    /// creating this room" are answered from.
-    pub viewer: Option<EntityId>,
-}
+/// Who the components are acting as, and the ankurah context they act
+/// through: `(context, viewer)`.
+///
+/// `viewer` is the reader's own `User` entity id, or `None` for an anonymous
+/// reader — what "is this my message", "did I react to this" and "who is
+/// creating this room" are answered from.
+///
+/// ONE VALUE RATHER THAN TWO SIGNALS, so that a host cannot move one half
+/// without the other: a single `.set()` carries both, and nothing here can
+/// observe a context paired with the reader who was signed in before it.
+pub type Session = (Context, Option<EntityId>);
 
 /// A place for a host to render something of its own, given the message the
 /// component is rendering.
@@ -148,6 +175,12 @@ pub struct ChatHooks {
 /// it, and a handler that resolves the context inside a future where the
 /// handshake is no longer reachable at all.
 ///
+/// The pair cannot be torn AT THE SOURCE: [`Session`] is one value, so the
+/// host moves the context and the reader in a single `.set()` and there is no
+/// instant at which one has moved and the other has not. What this type adds
+/// is a snapshot across TIME — the host may set its signal while a write is
+/// mid-flight, and that write finishes against the session it began under.
+///
 /// So every write path calls [`ChatContext::write_session`] BEFORE it defers,
 /// and carries this into the future it spawns. No reader means no session and
 /// no write: the auth demand has already been raised by the time `None` comes
@@ -172,6 +205,20 @@ pub struct ChatContext(SendWrapper<Arc<Inner>>);
 /// badge clears on a round trip instead of instantly; and all of it is scoped
 /// to the session, so all of it dies together when the session moves. One
 /// owner, one lifetime, one rebuild.
+///
+/// WHEN IT DIES, EXACTLY. The host's `.set()` does not reach here; the
+/// disposal effect does, and effects run a tick behind the set that woke them.
+/// So there is a window of one tick, and this is what it admits: a write that
+/// BEGAN under the departed session may complete through it — as itself, with
+/// its own author, against its own session's rows. That is the old session
+/// finishing its own bookkeeping, not this one being written by the wrong
+/// hand.
+///
+/// After the tick nothing of it runs again. The cursor managers' `disposed`
+/// flags are up, so every callback and every flush pass returns without doing
+/// anything, and `discard_stale` has taken the whole struct out of the cache.
+/// What is closed, and stays closed, is UNBOUNDED continuation: nothing here
+/// waits on a refcount, so nothing outlives the tick.
 #[derive(Default)]
 struct Shared {
     /// The generation these were built against. Anything found here for an
@@ -198,10 +245,19 @@ struct Shared {
 type QuerySlot<R> = (LiveQuery<R>, Option<QueryRegistration>);
 
 struct Inner {
-    session: ArcRwSignal<SendWrapper<Session>>,
-    /// Bumped by every [`ChatContext::set_session`]. `ankurah::Context` has no
-    /// equality, so this is how a component that built something against a
-    /// session recognises that it is looking at a different one.
+    /// The host's signal, read and never written. Every session accessor here
+    /// is a read of this, tracked or not.
+    session: Signal<Session>,
+    /// Which session this is, counting from zero.
+    ///
+    /// `ankurah::Context` has no equality, so "is this the same session I built
+    /// against" is not a question the signal's value can answer, and this
+    /// counter is the answer instead: everything session-scoped keys on it, and
+    /// reading it tracked is how a component subscribes to the swap.
+    ///
+    /// Bumped by the swap effect ([`ChatContextBuilder::build`]) rather than by
+    /// anything a host calls, which is why it moves one tick behind the host's
+    /// `.set()`.
     generation: ArcRwSignal<u64>,
     /// Which rooms this deployment offers, as an AnkQL predicate. The room
     /// SET is a host choice — a page may want one room, or three — and it is
@@ -219,9 +275,9 @@ struct Inner {
     hooks: ChatHooks,
 }
 
-/// Collects the handshake's parts. Only the ankurah context is required.
+/// Collects the handshake's parts. Only the session signal is required.
 pub struct ChatContextBuilder {
-    session: Session,
+    session: Signal<Session>,
     rooms_where: String,
     online: Option<Box<dyn Fn() -> bool>>,
     can_moderate: Option<Box<dyn Fn() -> bool>>,
@@ -230,39 +286,24 @@ pub struct ChatContextBuilder {
 }
 
 impl ChatContext {
-    /// Start a handshake against `context`, with no reader signed in.
-    pub fn new(context: Context) -> ChatContextBuilder {
+    /// Start a handshake that reads its session from the host's own signal.
+    ///
+    /// The session VARIES, the host owns it, and it flows one way: this crate
+    /// reads that signal and never writes it, and a host that signs a reader in
+    /// mid-visit does so by setting it — see the module docs. A host whose
+    /// session never changes sets its signal once and never again.
+    ///
+    /// Takes anything that converts, so a plain `RwSignal`, a `Memo` or a
+    /// derived `Signal` all pass without ceremony.
+    pub fn new(session: impl Into<Signal<Session>>) -> ChatContextBuilder {
         ChatContextBuilder {
-            session: Session { context, viewer: None },
+            session: session.into(),
             rooms_where: "true".to_string(),
             online: None,
             can_moderate: None,
             demand_auth: None,
             hooks: ChatHooks::default(),
         }
-    }
-
-    /// Point the mounted components at a different ankurah context, reader, or
-    /// both — the sign-in path. Queries re-point in place; nothing unmounts.
-    ///
-    /// THIS IS ALSO THE DISPOSAL POINT. Everything the handshake built for the
-    /// old session is dropped here rather than on the next accessor call, so a
-    /// surface that has since unmounted cannot leave a cursor manager alive
-    /// with live subscriptions — and, on the conversation side, still writing
-    /// cursor repairs through a context the reader has left. The accessors
-    /// discard stale state too, but as belt: nobody has to read anything for
-    /// the old session to end.
-    ///
-    /// The reader may CHANGE, not merely appear: signing in as somebody else
-    /// is a legitimate swap, and it leaves whatever the previous reader had
-    /// selected in the host's own signals. Every write revalidates its author
-    /// against the session before committing (see [`WriteSession`]), and the
-    /// direct-message paths additionally refuse a conversation whose two ends
-    /// have become the same person.
-    pub fn set_session(&self, context: Context, viewer: Option<EntityId>) {
-        self.0.session.set(SendWrapper::new(Session { context, viewer }));
-        self.0.generation.update(|n| *n += 1);
-        self.discard_stale(self.0.generation.get_untracked());
     }
 
     /// Which session this is, counting from zero. Tracked.
@@ -277,19 +318,19 @@ impl ChatContext {
     pub fn generation_untracked(&self) -> u64 { self.0.generation.get_untracked() }
 
     /// The ankurah context to read and write through. Reading this in an
-    /// `Effect` or a `Memo` is what makes a query re-point when the host
-    /// swaps the session.
-    pub fn context(&self) -> Context { self.0.session.get().context.clone() }
+    /// `Effect` or a `Memo` is what makes a query re-point when the host sets
+    /// its session signal.
+    pub fn context(&self) -> Context { self.0.session.get().0 }
 
     /// The context without subscribing — for event handlers and write paths,
     /// which want the session as of now and must not re-run on a swap.
-    pub fn context_untracked(&self) -> Context { self.0.session.get_untracked().context.clone() }
+    pub fn context_untracked(&self) -> Context { self.0.session.get_untracked().0 }
 
     /// The reader's own entity id, tracked.
-    pub fn viewer(&self) -> Option<EntityId> { self.0.session.get().viewer }
+    pub fn viewer(&self) -> Option<EntityId> { self.0.session.with(|(_, viewer)| *viewer) }
 
     /// The reader's own entity id, untracked.
-    pub fn viewer_untracked(&self) -> Option<EntityId> { self.0.session.get_untracked().viewer }
+    pub fn viewer_untracked(&self) -> Option<EntityId> { self.0.session.with_untracked(|(_, viewer)| *viewer) }
 
     /// Whether someone is signed in, tracked. Drives the composer's choice
     /// between sending and calling [`Self::demand_auth`].
@@ -302,9 +343,9 @@ impl ChatContext {
     /// `None` means nobody is signed in; the host has been asked to fix that
     /// and the caller should simply stop.
     pub fn write_session(&self) -> Option<WriteSession> {
-        let session = self.0.session.get_untracked();
-        match session.viewer {
-            Some(viewer) => Some(WriteSession { context: session.context.clone(), viewer }),
+        let (context, viewer) = self.0.session.get_untracked();
+        match viewer {
+            Some(viewer) => Some(WriteSession { context, viewer }),
             None => {
                 self.demand_auth();
                 None
@@ -403,10 +444,13 @@ impl ChatContext {
             // Dependencies first, outside any borrow — `rooms()` takes it too.
             let rooms = self.rooms()?;
             let viewer = self.viewer_untracked()?;
-            // Those two must be from the SAME session. `rooms()` can end up
-            // running an observer, and an observer can call `set_session`; a
-            // rooms query from before that, paired with the reader from after
-            // it, would window one deployment's rooms for another's reader.
+            // Those two must be from the SAME session: a rooms query from
+            // before a swap, paired with the reader from after it, would window
+            // one deployment's rooms for another's reader. `rooms()` can end up
+            // running an observer, and an observer that sets the host's session
+            // signal from its callback tears exactly that pair — for one tick,
+            // until the swap effect bumps the counter and this rebuilds. The
+            // re-read below closes any bump that has already landed.
             let Some(next) = self.crossed(generation) else {
                 let manager = ReadStateManager::try_new(self.context_untracked(), rooms, viewer)?;
                 let (published, loser) = self.publish(generation, manager, |shared| &mut shared.room_cursors);
@@ -469,13 +513,19 @@ impl ChatContext {
     ///    the observers, and dropping a cursor manager can end subscriptions —
     ///    either can re-enter. So the stale state and every losing build are
     ///    taken OUT under the borrow and dropped after it is released.
-    /// 3. NEVER CACHE ACROSS A GENERATION. An observer can call `set_session`
-    ///    from its callback. The generation is re-read after building and
-    ///    again after registering; if it moved, what was built belongs to a
-    ///    session nobody is in, and the loop starts over against the new one.
+    /// 3. NEVER CACHE ACROSS A GENERATION. The generation is re-read after
+    ///    building and again after registering; if it moved, what was built
+    ///    belongs to a session nobody is in, and the loop starts over against
+    ///    the new one. Note WHEN it can move: the counter is bumped by the swap
+    ///    effect, so an observer that sets the host's session signal from its
+    ///    own callback does not move it inside this call — what is built here
+    ///    is published, and the effect discards it a tick later. The re-reads
+    ///    stay because the rule is about the cache, not about who moved the
+    ///    counter: nothing may be published under a generation that is no
+    ///    longer current, whenever it stopped being current.
     /// 4. THE LOOP CANNOT SPIN. Each retry re-reads the generation, which only
     ///    ever increases, so each pass observes a strictly newer session than
-    ///    the last. A host whose observer calls `set_session` on every single
+    ///    the last. A host that sets its session signal on every single
     ///    notification would never converge — that host is not supported, and
     ///    nothing else can produce it.
     ///
@@ -497,12 +547,12 @@ impl ChatContext {
     ///    `QueryRegistration` drops → `query_unregistered` → observer calls an
     ///    accessor → `borrow_mut` panics. Forbidden by taking the stale value
     ///    out and dropping it after the borrow ends. Same for a losing build.
-    /// 3. `members()` reads generation 4 → builds → `register` → observer
-    ///    calls `set_session` (now 5) → `members()` resumes, resets the cache
-    ///    to 4, and returns a query on a context nobody is in. Forbidden by
-    ///    re-reading the generation after building and after registering.
+    /// 3. `members()` reads generation 4 → builds → `register` → the counter
+    ///    reaches 5 mid-call → `members()` resumes, resets the cache to 4, and
+    ///    returns a query on a context nobody is in. Forbidden by re-reading
+    ///    the generation after building and after registering.
     ///    Its cursor form: `rooms()` returns generation 4's rooms, the
-    ///    observer swaps, and `viewer_untracked()` answers generation 5 — a
+    ///    counter reaches 5, and `viewer_untracked()` answers generation 5 — a
     ///    manager windowing one session's rooms for another's reader.
     fn shared_query<R>(
         &self,
@@ -570,6 +620,13 @@ impl ChatContext {
     /// flag up and drops the guards here, so a task that wakes afterwards does
     /// nothing. Both calls happen after the borrow is released, because
     /// unsubscribing runs code that must not be holding it.
+    ///
+    /// TWO CALLERS, ONE PATH. The swap effect calls this the tick after the
+    /// host sets its session signal, which is what makes disposal eager;
+    /// every accessor calls it too, which is belt — and, since the counter
+    /// only ever moves inside that effect, belt that finds the work already
+    /// done. Idempotent either way: whichever call arrives on a generation the
+    /// cache is already built for takes nothing out and disposes nothing.
     fn discard_stale(&self, generation: u64) {
         let stale = {
             let mut shared = self.0.shared.borrow_mut();
@@ -684,12 +741,6 @@ impl ChatContext {
 }
 
 impl ChatContextBuilder {
-    /// Who is signed in right now. Leave unset for an anonymous start.
-    pub fn viewer(mut self, viewer: Option<EntityId>) -> Self {
-        self.session.viewer = viewer;
-        self
-    }
-
     /// Which rooms this deployment offers, as an AnkQL predicate over `Room`.
     /// Defaults to all of them. This is the configurable room set, expressed
     /// as data rather than as a query object — a page showing one room passes
@@ -728,8 +779,8 @@ impl ChatContextBuilder {
     }
 
     pub fn build(self) -> ChatContext {
-        ChatContext(SendWrapper::new(Arc::new(Inner {
-            session: ArcRwSignal::new(SendWrapper::new(self.session)),
+        let chat = ChatContext(SendWrapper::new(Arc::new(Inner {
+            session: self.session,
             generation: ArcRwSignal::new(0),
             rooms_where: self.rooms_where,
             shared: RefCell::new(Shared::default()),
@@ -737,11 +788,50 @@ impl ChatContextBuilder {
             can_moderate: self.can_moderate.unwrap_or_else(|| Box::new(|| false)),
             demand_auth: self.demand_auth,
             hooks: self.hooks,
-        })))
+        })));
+
+        // THE SWAP. The host's set lands here and nowhere else: the counter
+        // moves, and everything the previous session built is ENDED.
+        //
+        // Disposal is eager rather than waiting to be noticed. A surface that
+        // has since unmounted must not leave a cursor manager alive with live
+        // subscriptions — and, on the conversation side, still writing cursor
+        // repairs through a context the reader has left. `discard_stale` runs
+        // from the accessors too, but as belt: nobody has to read anything for
+        // the old session to end.
+        //
+        // An effect runs a tick behind the set that woke it, so eager means
+        // one tick, not immediately. What that tick admits is stated on
+        // `Shared` and repeated at each manager's `dispose`.
+        //
+        // Created under the owner that builds the handshake — the owner
+        // `provide` runs in — and it lives exactly as long as that scope,
+        // which is the lifetime of the cache it guards: when the scope goes,
+        // the effect goes with it and nothing is left to bump a counter for a
+        // tree that has been torn down.
+        Effect::new({
+            let chat = chat.clone();
+            move |ran_before: Option<()>| {
+                // The one tracked read. Everything below is untracked, so this
+                // re-runs for the session and for nothing else.
+                chat.0.session.track();
+                if ran_before.is_none() {
+                    return; // the first run is the mount, not a swap
+                }
+                untrack(|| {
+                    chat.0.generation.update(|n| *n += 1);
+                    chat.discard_stale(chat.0.generation.get_untracked());
+                });
+            }
+        });
+
+        chat
     }
 
     /// Build and install the handshake for everything mounted below this
-    /// point, returning the handle for a later [`ChatContext::set_session`].
+    /// point, returning the handle for whatever else the host wants from it —
+    /// [`ChatContext::generation`] to key a subtree on, or the session's own
+    /// queries.
     pub fn provide(self) -> ChatContext {
         let chat = self.build();
         provide_context(chat.clone());

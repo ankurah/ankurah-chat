@@ -8,7 +8,9 @@ that want to put live chat surfaces in their own pages.
 
 - stands up its own ankurah node (typically an in-browser ephemeral node
   connected over websocket to a durable chat server) and hands these
-  components an `ankurah::Context`;
+  components a **signal** of its session — that `ankurah::Context` and who is
+  reading through it. The host owns that signal and is the only thing that
+  writes it;
 - owns sign-in entirely — components render read-only on an unauthenticated
   context, and the *send affordance* invokes a **host-provided callback**
   when auth is needed. Upgrading anonymous → authenticated must not remount
@@ -63,8 +65,11 @@ mount what you want:
 ```rust
 use ankurah_chat_leptos::{ChatContext, RoomLog, install_styles};
 
-ChatContext::new(context)              // your ankurah::Context
-    .viewer(Some(my_user_id))          // or leave it out: read-only
+// Your signal, holding your ankurah::Context and who is reading through it
+// (`None` for read-only). You own it; the components only read it.
+let session = RwSignal::new((context, Some(my_user_id)));
+
+ChatContext::new(session)
     .on_auth_demand(|| start_sign_in())
     .provide();
 install_styles();
@@ -84,8 +89,8 @@ The surfaces are `RoomSelector` and `RoomLog` (both keyed on a room id),
 them, in any combination.
 
 Which rooms exist is the one predicate a host owns, and it is declared as data:
-`ChatContext::new(ctx).rooms_where("name = 'general'")`. It scopes the selector
-and the unread windows together.
+`ChatContext::new(session).rooms_where("name = 'general'")`. It scopes the
+selector and the unread windows together.
 
 ### On your side
 
@@ -130,16 +135,29 @@ zero (its defaults use `:where`), so your value wins.
 
 ### Signing in mid-visit
 
+Set your session signal:
+
 ```rust
-chat.set_session(new_context, Some(user_id));
+session.set((new_context, Some(user_id)));
 ```
 
-That is the whole of it. Nothing unmounts, so the draft, the armed reply, the
-selected room, the open conversation and the message being edited all stay
-exactly as they were; everything scoped to the session — members, rooms, DM
-threads, both read-cursor managers — is rebuilt inside the handshake. You hold
-no query and no manager, so there is nothing to swap alongside it and no window
-where half the surfaces read through one session and half through another.
+That is the whole of it, and it is the only write path — the components never
+write that signal. Both halves move in the one `.set()`, so nothing can see the
+new context paired with the previous reader.
+
+Nothing unmounts, so the draft, the armed reply, the selected room, the open
+conversation and the message being edited all stay exactly as they were;
+everything scoped to the session — members, rooms, DM threads, both read-cursor
+managers — is rebuilt inside the handshake. You hold no query and no manager,
+so there is nothing to swap alongside it and no window where half the surfaces
+read through one session and half through another.
+
+The rebuild is driven by an effect, so it happens one tick after your `.set()`,
+and that tick has a stated meaning: a write that had ALREADY BEGUN under the
+departed session may finish through it — as itself, by the author who started
+it, against that session's own rows. That is the old session completing its own
+bookkeeping. Nothing of it runs after the tick; what is ruled out is a manager
+or a flush continuing for as long as some background task happens to hold it.
 
 One thing does not survive: the timeline's loaded window. A `ScrollManager`
 takes its context at construction and ankurah-virtual-scroll 0.9.0 cannot

@@ -180,7 +180,8 @@ impl ReadStateManager {
     /// 1. the reader reaches the live tail, `mark_read` spawns a flush, and
     ///    that task holds a strong reference while it awaits its commit;
     /// 2. the surface unmounts;
-    /// 3. the host calls `set_session`, and the handshake drops this manager;
+    /// 3. the host sets its session signal, and the handshake drops this
+    ///    manager;
     /// 4. the task wakes. `Inner` is still alive because the task held it, so
     ///    every subscription is still live and the write goes through the
     ///    context of a session the reader has left.
@@ -188,6 +189,15 @@ impl ReadStateManager {
     /// So disposal is explicit. The flag goes up, and the guards and windows
     /// are dropped HERE rather than whenever the refcount reaches zero: a task
     /// or callback that wakes afterwards sees the flag and does nothing.
+    ///
+    /// WHAT THIS DOES NOT CATCH, and does not try to. The handshake gets here
+    /// through an effect, one tick after the host's set, so a flush already
+    /// awaiting its commit when the set happened can land inside that tick —
+    /// as the write it always was, by the author who started it, against that
+    /// session's own cursor rows. That is the departed session finishing its
+    /// bookkeeping. Everything after the tick sees the flag and stops, so what
+    /// is closed is a manager continuing for as long as some task happens to
+    /// hold it.
     ///
     /// Called by the handshake from its discard path, outside the borrow on
     /// the cache — dropping guards runs unsubscribe code that must not be
