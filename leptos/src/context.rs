@@ -93,7 +93,7 @@
 //! take a [`WriteSession`] instead, which resolves the reader and the context
 //! together and is the one place the auth demand is raised.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use ankurah::{Context, EntityId, LiveQuery, View};
@@ -295,16 +295,41 @@ struct Inner {
     /// until that effect ran, and every build in between stamped the arriving
     /// context with the departed session's number.
     ///
-    /// It moves once per OBSERVED change: sets in one tick with no read
-    /// between them coalesce into a single recompute, so a host that sets B and
-    /// then C gets one number, standing for C. That is the session anything
-    /// rebuilds against, and the intervening B built nothing.
+    /// It moves once per GENERATION-OBSERVED change: sets with no generation
+    /// read between them coalesce into a single recompute, so a host that sets
+    /// B and then C gets one number, standing for C. A read of the session
+    /// itself — [`ChatContext::context_untracked`], a write session — does NOT
+    /// advance the version: the host can set B, hand B to a write, set C, and
+    /// the version still moves once, to the number standing for C. That is the
+    /// session anything rebuilds against; B was written through, never built
+    /// against.
     ///
-    /// Arc-flavoured rather than arena-flavoured, like the signal it versions,
-    /// so a read from outside the reactive system — a query observer's
-    /// callback, a background task holding a handle — answers rather than
-    /// panicking on an arena slot the owner has disposed.
+    /// Arc-flavoured rather than arena-flavoured so the NUMBER survives its
+    /// owner: a CLEAN read from outside the reactive system — a query
+    /// observer's callback, a background task holding a handle — answers
+    /// instead of panicking on a disposed arena slot, and every read during
+    /// teardown's own cleanup answers too (cleanups run before the owner's
+    /// arena nodes drop). What it does not survive: a RECOMPUTE after the
+    /// host's owner tree is gone, because the closure reads `session`, and the
+    /// signal wrapper is arena-allocated under whatever owner was current at
+    /// [`ChatContext::new`]. A set landing after that owner's disposal marks
+    /// the memo dirty, and the next read would recompute through the dead
+    /// slot. The crate's own paths stop first — `ended` below turns every
+    /// accessor away before it reads — and a host that keeps the handle past
+    /// teardown and reads the raw session accessors is reaching into its own
+    /// disposed signal.
     generation: ArcMemo<u64>,
+    /// TERMINAL. Raised by [`ChatContext::discard_all`] before it takes the
+    /// cache, so everything that runs downstream of teardown — including the
+    /// observer callbacks teardown's own unregistrations fire — finds the
+    /// handshake ended rather than an empty cache it would repopulate with
+    /// managers nothing will ever dispose. Checked at the top of every
+    /// accessor loop and inside every cache write. Never lowered.
+    ended: Cell<bool>,
+    /// The version as of teardown, for [`ChatContext::generation`] to answer
+    /// after `ended`: reading the memo then might recompute through the
+    /// host's disposed signal, so the last live number is frozen here instead.
+    final_generation: Cell<u64>,
     /// Which rooms this deployment offers, as an AnkQL predicate. The room
     /// SET is a host choice — a page may want one room, or three — and it is
     /// declared once here rather than per component, because the rail's unread
@@ -376,15 +401,30 @@ impl ChatContext {
     ///
     /// The NUMBER never lags, whichever way it is read: it versions the
     /// session signal, and a read recomputes it if the host has set since the
-    /// last one. Sets in one tick with no read between them coalesce, so it
-    /// moves once per session anything can observe rather than once per
-    /// `.set()`.
-    pub fn generation(&self) -> u64 { self.0.generation.get() }
+    /// last one. Sets with no generation read between them coalesce, so it
+    /// moves once per session a generation read observed rather than once per
+    /// `.set()` — a set that only ever reached a write path advances nothing.
+    ///
+    /// After the owner the handshake was built in is disposed, this stops
+    /// following the signal and answers the version as of teardown, frozen:
+    /// recomputing would read the host's own arena-allocated signal, which
+    /// dies with the host's owners.
+    pub fn generation(&self) -> u64 {
+        if self.0.ended.get() {
+            return self.0.final_generation.get();
+        }
+        self.0.generation.get()
+    }
 
     /// Which session this is, without subscribing. Recomputed on this read like
     /// [`Self::generation`]: untracked means no subscription, not an older
-    /// number.
-    pub fn generation_untracked(&self) -> u64 { self.0.generation.get_untracked() }
+    /// number. Frozen after teardown, like [`Self::generation`].
+    pub fn generation_untracked(&self) -> u64 {
+        if self.0.ended.get() {
+            return self.0.final_generation.get();
+        }
+        self.0.generation.get_untracked()
+    }
 
     /// The ankurah context to read and write through. Reading this in an
     /// `Effect` or a `Memo` is what makes a query re-point when the host sets
@@ -412,6 +452,12 @@ impl ChatContext {
     /// `None` means nobody is signed in; the host has been asked to fix that
     /// and the caller should simply stop.
     pub fn write_session(&self) -> Option<WriteSession> {
+        // An ended handshake refuses without demanding: the surface is gone,
+        // so there is nobody to sign in — and the signal read below would
+        // reach the host's disposed arena slot.
+        if self.0.ended.get() {
+            return None;
+        }
         let (context, viewer) = self.0.session.get_untracked();
         match viewer {
             Some(viewer) => Some(WriteSession { context, viewer }),
@@ -504,8 +550,16 @@ impl ChatContext {
     /// reached the bottom. `None` for an anonymous reader, who has no cursors.
     /// A borrow, like the rest — see [`Self::members`].
     pub fn room_cursors(&self) -> Option<ReadStateManager> {
+        if self.0.ended.get() {
+            return None;
+        }
         let mut generation = self.0.generation.get();
         loop {
+            // Re-checked every pass: teardown can land mid-call, through an
+            // observer this very loop's registrations fire.
+            if self.0.ended.get() {
+                return None;
+            }
             self.discard_stale(generation);
             if let Some(existing) = self.peek(generation, |shared| shared.room_cursors.clone()) {
                 return Some(existing);
@@ -541,8 +595,14 @@ impl ChatContext {
     /// reader; see [`Self::room_cursors`] for why there is exactly one, and
     /// [`Self::members`] for why the handle is a borrow.
     pub fn dm_cursors(&self) -> Option<DmReadStateManager> {
+        if self.0.ended.get() {
+            return None;
+        }
         let mut generation = self.0.generation.get();
         loop {
+            if self.0.ended.get() {
+                return None;
+            }
             self.discard_stale(generation);
             if let Some(existing) = self.peek(generation, |shared| shared.dm_cursors.clone()) {
                 return Some(existing);
@@ -596,7 +656,16 @@ impl ChatContext {
     ///    ever increases, so each pass observes a strictly newer session than
     ///    the last. A host that sets its session signal on every single
     ///    notification would never converge — that host is not supported, and
-    ///    nothing else can produce it.
+    ///    nothing else can produce it. (Teardown is the one thing that stops
+    ///    the generation moving; rule 5 is what ends the loop then.)
+    /// 5. ENDED IS FINAL. Teardown raises the handshake's `ended` bit before
+    ///    it empties the cache, and every accessor checks it at the top of
+    ///    every pass, every cache write refuses under it, and `discard_stale`
+    ///    will not reset `built_for` after it. Without this, the observer
+    ///    callbacks teardown's own unregistrations fire could walk back in,
+    ///    find a coherent-looking empty cache, and publish a manager that
+    ///    nothing would ever dispose — alive until its refcount died, which
+    ///    is exactly the outcome `discard_all` exists to rule out.
     ///
     /// THE ORDERS THE FIRST THREE FORBID, written out because nothing here is
     /// covered by a running test — the crate is `cfg(target_arch = "wasm32")`
@@ -629,6 +698,13 @@ impl ChatContext {
     ///    `mark_read` would then write a cursor row through the arriving
     ///    context. Forbidden by the same re-read, standing in `room_cursors`
     ///    between those two reads and the manager they would build.
+    /// 4. the owner is disposed → `on_cleanup` → `discard_all` empties the
+    ///    cache → dropping the old registrations fires `query_unregistered` →
+    ///    an observer holding the handshake calls an accessor → it rebuilds
+    ///    into the emptied cache, and the manager it publishes outlives
+    ///    teardown with its flag never raised. Forbidden by rule 5: `ended`
+    ///    goes up before the cache is taken, and the observer's call answers
+    ///    `None` at the top of its first pass.
     fn shared_query<R>(
         &self,
         predicate: &str,
@@ -638,9 +714,17 @@ impl ChatContext {
     where
         R: View + Clone + Send + Sync + 'static,
     {
+        if self.0.ended.get() {
+            return None;
+        }
         // Tracked once: this read is what re-runs the caller on a swap.
         let mut generation = self.0.generation.get();
         loop {
+            // Rule 5: re-checked every pass, because teardown can land
+            // mid-call through this loop's own registrations.
+            if self.0.ended.get() {
+                return None;
+            }
             self.discard_stale(generation);
             if let Some(existing) = self.peek(generation, |shared| slot(shared).as_ref().map(|(query, _)| query.clone())) {
                 return Some(existing);
@@ -704,6 +788,12 @@ impl ChatContext {
     /// out. Idempotent: a call arriving on the generation the cache is already
     /// built for takes nothing out and disposes nothing.
     fn discard_stale(&self, generation: u64) {
+        // After teardown the cache is already empty and [`Self::discard_all`]
+        // had the last word — resetting `built_for` here would hand a
+        // late accessor a coherent-looking empty cache to repopulate.
+        if self.0.ended.get() {
+            return;
+        }
         let stale = {
             let mut shared = self.0.shared.borrow_mut();
             if shared.built_for == generation {
@@ -728,7 +818,24 @@ impl ChatContext {
     /// Dropping this handshake's own references is not enough either: that
     /// task's strong reference keeps the manager, its subscriptions and its
     /// context alive for as long as it runs.
+    ///
+    /// And it is TERMINAL — emptying the cache is only half the job, because
+    /// ending it fires observer callbacks, and an observer that answers by
+    /// calling an accessor would rebuild into the cache just emptied (rule 5
+    /// and forbidden order 4 on [`Self::shared_query`]). So the `ended` bit
+    /// goes up first, and after this returns every accessor answers `None`,
+    /// [`Self::write_session`] refuses without demanding, and the public
+    /// generation answers its frozen final number.
     fn discard_all(&self) {
+        // The frozen number first, while the arena is still alive — cleanups
+        // run before the owner's nodes drop, so this read is safe even if a
+        // set left the memo dirty. Then the terminal bit, BEFORE the cache is
+        // taken: [`Self::end`] fires observer callbacks (dropped
+        // registrations), and an observer that calls back into an accessor
+        // during this teardown must find the handshake ended, not an empty
+        // cache it would repopulate with a manager nothing will ever dispose.
+        self.0.final_generation.set(self.0.generation.get_untracked());
+        self.0.ended.set(true);
         let held = {
             let mut shared = self.0.shared.borrow_mut();
             let built_for = shared.built_for;
@@ -768,6 +875,9 @@ impl ChatContext {
     /// serves both the read and the write, and reaching a `&mut` through a
     /// shared borrow is not something to be clever about.
     fn peek<T>(&self, generation: u64, pick: impl Fn(&mut Shared) -> Option<T>) -> Option<T> {
+        if self.0.ended.get() {
+            return None;
+        }
         let mut shared = self.0.shared.borrow_mut();
         if shared.built_for != generation {
             return None;
@@ -788,6 +898,12 @@ impl ChatContext {
     where
         R: View + Clone + Send + Sync + 'static,
     {
+        // Ended is a refusal here, not just at the accessor's door: teardown
+        // can land between a build and its publication, through the very
+        // callbacks the build fired.
+        if self.0.ended.get() {
+            return (None, Some(query));
+        }
         let mut shared = self.0.shared.borrow_mut();
         if shared.built_for != generation {
             return (None, Some(query));
@@ -812,6 +928,9 @@ impl ChatContext {
     where
         R: View + Clone + Send + Sync + 'static,
     {
+        if self.0.ended.get() {
+            return Some(registration);
+        }
         let mut shared = self.0.shared.borrow_mut();
         if shared.built_for != generation {
             return Some(registration);
@@ -833,6 +952,9 @@ impl ChatContext {
         value: T,
         slot: fn(&mut Shared) -> &mut Option<T>,
     ) -> (Option<T>, Option<T>) {
+        if self.0.ended.get() {
+            return (None, Some(value));
+        }
         let mut shared = self.0.shared.borrow_mut();
         if shared.built_for != generation {
             return (None, Some(value));
@@ -892,9 +1014,16 @@ impl ChatContextBuilder {
         // it rather than moved alongside it: a memo marked dirty by a `.set()`
         // recomputes on the next read, whoever reads it and however, so no
         // accessor can find a number the host's set has already outrun. What
-        // the number itself is does not matter — only that it differs from the
+        // the number itself is does not matter — only that it DIFFERS from the
         // one before it — so the closure is `prev + 1` and reads nothing but
-        // the session. See `Inner::generation`.
+        // the session. That "differs" is load-bearing twice over: the swap
+        // effect below re-runs only because the memo reports its value CHANGED
+        // (an effect woken by a memo walks its sources and compares), and
+        // `prev + 1` is strictly increasing, so it always does. A closure that
+        // could ever repeat a value would silently stop the swap effect.
+        // See `Inner::generation`; the reactive facts this stands on are
+        // pinned by `tests/session_version.rs`, which carries a copy of this
+        // closure — CHANGE THEM TOGETHER.
         let session = self.session;
         let generation = ArcMemo::new(move |prev: Option<&u64>| {
             session.track();
@@ -904,6 +1033,8 @@ impl ChatContextBuilder {
         let chat = ChatContext(SendWrapper::new(Arc::new(Inner {
             session,
             generation,
+            ended: Cell::new(false),
+            final_generation: Cell::new(0),
             rooms_where: self.rooms_where,
             shared: RefCell::new(Shared::default()),
             online: self.online.unwrap_or_else(|| Box::new(|| true)),
@@ -929,11 +1060,13 @@ impl ChatContextBuilder {
         // `discard_stale` the generation the cache is already on, and that is a
         // no-op by idempotence.
         //
-        // Sets in one tick with no read between them coalesce into one
+        // Sets with no GENERATION read between them coalesce into one
         // recompute and therefore one disposal, against the last of them. That
-        // is what should happen: a read is what makes a session observed, so
-        // nothing built against the ones in between, and the final session is
-        // the one everything rebuilds against.
+        // is what should happen: a generation read is what makes a session
+        // observed by the cache — a plain session read (a write path taking
+        // its snapshot) observes a value without advancing the version — so
+        // nothing was built against the ones in between, and the final
+        // session is the one everything rebuilds against.
         //
         // Created under the owner that builds the handshake — the owner
         // `provide` runs in — and it lives exactly as long as that scope.

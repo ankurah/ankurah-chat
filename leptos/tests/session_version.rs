@@ -35,7 +35,11 @@ struct Ctx(#[allow(dead_code)] u32);
 /// The shape of `ankurah_chat_leptos::Session`.
 type Session = (Ctx, Option<u64>);
 
-/// `ChatContextBuilder::build`'s generation, verbatim.
+/// `ChatContextBuilder::build`'s generation, verbatim — A COPY, because the
+/// crate's lib is empty on the host, so nothing mechanical ties the two.
+/// `build()` carries the matching pointer; whoever changes either closure
+/// changes both, and a `prev`-shape that could ever repeat a value breaks the
+/// swap effect over there (it re-runs only when the memo's value CHANGED).
 fn version(session: Signal<Session>) -> ArcMemo<u64> {
     ArcMemo::new(move |prev: Option<&u64>| {
         session.track();

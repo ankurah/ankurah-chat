@@ -192,6 +192,13 @@ If you would RATHER discard everything on sign-in — draft included — key the
 subtree on `chat.generation()` and Leptos will remount it for you. Both models
 work; neither is privileged.
 
+Unmounting the subtree the handshake was provided in ENDS it, terminally:
+teardown disposes everything the session built, and from that moment every
+accessor answers `None`, writes are refused without raising the auth demand,
+and `chat.generation()` answers its final number, frozen. A handle you kept
+past teardown is a handle to an ended handshake, not a way to keep using one —
+mount a new handshake instead.
+
 ## Status & trajectory
 
 The model has landed and community.ankurah.org consumes it — the collections
