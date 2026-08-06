@@ -22,10 +22,12 @@
 //! instead of opening a draft: a reader with no viewer who PRESSES ON the
 //! message box, or has it focused programmatically, or drags text onto it,
 //! raises the demand there and then and is left without a caret, once per
-//! gesture; their Tab skips the box rather than landing on it; and an anonymous
-//! write raises the demand too (see [`ChatContext::demand_auth`]). A signed-in
-//! reader meets none of it. Then, once the reader signs in, the host sets that
-//! signal to the authenticated context and the reader's id:
+//! gesture; their Tab skips the box rather than landing on it; the box is
+//! `readonly` while they have no viewer, so nothing they type, paste, drop or
+//! compose reaches the draft; and an anonymous write raises the demand too (see
+//! [`ChatContext::demand_auth`]). A signed-in reader meets none of it. Then,
+//! once the reader signs in, the host sets that signal to the authenticated
+//! context and the reader's id:
 //!
 //! ```ignore
 //! let session = RwSignal::new((anonymous_context, None));
@@ -500,15 +502,19 @@ impl ChatContext {
 
     /// Ask the host to sign the reader in.
     ///
-    /// TWO MOMENTS RAISE IT, and only for a reader with no viewer. REACHING
-    /// FOR THE MESSAGE BOX: a pointer press on the composer, a programmatic
-    /// focus, or text dragged onto it raises this and the composer drops the
-    /// focus rather than opening a caret — once per gesture, so a double-click
-    /// and a ceremony that hands focus back on close each raise it once. An
-    /// anonymous reader's Tab skips the box entirely rather than landing on
-    /// something that would blur. WRITE: [`Self::write_session`] demands for
-    /// anything that would commit, which covers every affordance that never
-    /// touches the composer. A signed-in reader meets neither.
+    /// TWO MOMENTS RAISE IT, and only for a reader with no viewer. REACHING FOR
+    /// THE MESSAGE BOX: a pointer press on the composer, a programmatic focus,
+    /// text dragged onto it, or — for a session that dropped to anonymous under
+    /// a caret that had already landed — a keystroke that would have changed or
+    /// sent the draft. The composer drops the focus rather than opening a
+    /// caret, and holds the box `readonly` so none of those write anything.
+    /// ONCE PER GESTURE, counted rather than timed: a double-click raises it
+    /// once, and a ceremony that hands focus back on close raises it no further
+    /// times at all. An anonymous reader's Tab skips the box entirely rather
+    /// than landing on something that would blur. WRITE:
+    /// [`Self::write_session`] demands for anything that would commit, which
+    /// covers every affordance that never touches the composer. A signed-in
+    /// reader meets neither.
     ///
     /// MAKE THE CALLBACK IDEMPOTENT. A genuinely new gesture while the ceremony
     /// is already open raises it again — that is the point of the per-gesture
@@ -955,8 +961,11 @@ impl ChatContext {
     /// calling an accessor would rebuild into the cache just emptied (rule 5
     /// and forbidden order 4 on [`Self::shared_query`]). So the `ended` bit
     /// goes up first, and after this returns every QUERY AND CURSOR accessor
-    /// answers `None`, [`Self::write_session`] refuses without demanding, and
-    /// the public generation answers its frozen final number. The raw session
+    /// answers `None`, [`Self::write_session`] refuses without demanding,
+    /// [`Self::is_authenticated`] and `can_demand_auth` both answer false — the
+    /// pair that keeps the composer's gate standing down rather than treating a
+    /// departed reader as a guest to raise a ceremony at — and the public
+    /// generation answers its frozen final number. The raw session
     /// accessors — [`ChatContext::context`], [`ChatContext::viewer`] and
     /// their untracked forms — are the deliberate exception: they have no
     /// `None` to answer, and what they read is the HOST'S signal, whose

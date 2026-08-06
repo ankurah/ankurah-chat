@@ -33,12 +33,17 @@
 //! The composer asks EARLIER as well. A reader with no viewer who presses on
 //! the message box raises the same callback there, once per gesture, and the
 //! composer drops the focus rather than opening a caret; their Tab skips the
-//! box entirely rather than landing on it; and no text of theirs reaches the
-//! draft by drop or by paste either. So a reader learns what is needed before
-//! composing rather than after. That is the anonymous-then-signs-in direction
-//! only: a session that DROPS to anonymous keeps whatever caret and draft it
-//! already had until the next gesture. The write demand above stays regardless,
-//! and a signed-in reader meets none of it.
+//! box entirely rather than landing on it; and the box is `readonly` while they
+//! have no viewer, so no keystroke, paste, drop or IME composition reaches the
+//! draft. A reader therefore learns what is needed before composing rather than
+//! after.
+//!
+//! The DOWN transition is not the mirror of that: a session that drops to
+//! anonymous under a focused composer keeps its caret and whatever was already
+//! typed, because nothing reaches back to blur it — but the box stops accepting
+//! text at once, and the next keystroke that would have changed or sent the
+//! draft raises the ceremony instead of doing nothing. The write demand above
+//! stays regardless, and a signed-in reader meets none of it.
 //!
 //! # What a host provides
 //!

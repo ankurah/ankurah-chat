@@ -82,21 +82,37 @@ view! { <RoomLog room=room_id /> }
 `on_auth_demand` is the whole of what an anonymous reader meets. **Reaching for
 the message box raises it** — a pointer press on the composer, a programmatic
 focus, or text dragged onto it — and the composer drops the focus rather than
-opening a caret, so nobody composes a draft they cannot send. Once per gesture:
-a double-click raises it once, and so does a ceremony that hands focus back when
-it closes. An anonymous reader's **Tab skips the box** rather than landing on
-it. Every **write** raises it too (a send, a reaction, creating a room, opening
-a conversation). A signed-in reader meets none of it.
+opening a caret, so nobody composes a draft they cannot send. An anonymous
+reader's **Tab skips the box** rather than landing on it, and the box is
+`readonly` while they have no viewer, so no keystroke, paste, drop or IME
+composition reaches the draft. Every **write** raises it too (a send, a
+reaction, creating a room, opening a conversation). A signed-in reader meets
+none of it.
+
+**Once per gesture**, counted rather than timed. A double-click raises it once,
+not twice. A ceremony that hands focus back to the composer when it closes
+raises it **zero** more times, however long it was open — the returning focus is
+not a gesture. The next real press raises it again.
 
 **Make the callback idempotent.** A genuinely new gesture while the ceremony is
 already open raises it again — that is what lets a reader who dismissed it get
 it back — so raising an open ceremony should be a no-op on your side.
 
-Two limits on the claim, stated plainly. This is the *anonymous-then-signs-in*
-direction: a session that **drops** to anonymous keeps whatever caret and draft
-it already had until the next gesture. And installing **no callback** removes
-the composer behaviour entirely — the box takes focus as it always did, and the
-send is refused with a warning in the log rather than a ceremony.
+Three limits on the claim, stated plainly:
+
+- The **down transition** is not symmetric. A session that drops to anonymous
+  under a focused composer keeps its caret and whatever was already typed;
+  nothing reaches back to blur it. What it loses at once is mutability — the box
+  goes `readonly` — and the next keystroke that would have changed or sent the
+  draft raises the ceremony instead of doing nothing.
+- Two focus routes stay **silent** rather than raising a second ceremony: a
+  screen reader's browse-mode activation, and your own code focusing the box.
+  The crate re-arms for a reader clicking Reply, because it knows that focus
+  came from a click; it cannot know that of those two, so after a dismissed
+  ceremony they wait for the reader to press on the box.
+- Installing **no callback** removes the composer behaviour entirely — the box
+  takes focus and text as it always did, and the send is refused with a warning
+  in the log rather than a ceremony.
 
 **The surfaces take identifiers, not objects.** A room id, a correspondent's
 id — nothing else. The queries behind them, the members list, the read cursors:
