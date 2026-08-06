@@ -582,7 +582,7 @@ impl ChatContext {
                 match published {
                     Some(manager) => return Some(manager),
                     None => {
-                        generation = self.0.generation.get_untracked();
+                        generation = self.generation_untracked();
                         continue;
                     }
                 }
@@ -616,7 +616,7 @@ impl ChatContext {
                 match published {
                     Some(manager) => return Some(manager),
                     None => {
-                        generation = self.0.generation.get_untracked();
+                        generation = self.generation_untracked();
                         continue;
                     }
                 }
@@ -747,7 +747,7 @@ impl ChatContext {
             let (published, loser) = self.publish_query(generation, query, slot);
             drop(loser);
             let Some((published, ours)) = published else {
-                generation = self.0.generation.get_untracked();
+                generation = self.generation_untracked();
                 continue;
             };
             if !ours {
@@ -863,7 +863,17 @@ impl ChatContext {
     ///
     /// The read recomputes the version, so a `.set()` that landed since the
     /// caller took its number is answered HERE rather than a tick later.
+    ///
+    /// `None` under `ended`, without touching the memo: after teardown there
+    /// is no session to cross INTO — nothing may be published anyway — and a
+    /// recompute would read the host's arena-allocated signal, which an owner
+    /// disposed mid-call has already dropped. This and the continue arms going
+    /// through [`Self::generation_untracked`] are what make rule 5's "every
+    /// pass" hold on the straddling call too, not just the fresh one.
     fn crossed(&self, generation: u64) -> Option<u64> {
+        if self.0.ended.get() {
+            return None;
+        }
         let now = self.0.generation.get_untracked();
         (now != generation).then_some(now)
     }
