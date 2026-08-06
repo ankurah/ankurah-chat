@@ -586,6 +586,15 @@ impl ChatContext {
                 }
                 let manager = ReadStateManager::try_new(self.context_untracked(), rooms, viewer)?;
                 let (published, loser) = self.publish(generation, manager, |shared| &mut shared.room_cursors);
+                // A losing manager is DISPOSED, not merely dropped — the
+                // crate's own rule for cursor managers, and construction is
+                // why it applies here: building one can already have started
+                // work holding a strong reference (the DM side's windows can
+                // reach a repair task), and nobody will ever publish or end a
+                // loser. The flag goes up before the drop, outside the borrow.
+                if let Some(loser) = &loser {
+                    loser.dispose();
+                }
                 drop(loser);
                 match published {
                     Some(manager) => return Some(manager),
@@ -625,6 +634,13 @@ impl ChatContext {
                 }
                 let manager = DmReadStateManager::try_new(self.context_untracked(), threads, viewer)?;
                 let (published, loser) = self.publish(generation, manager, |shared| &mut shared.dm_cursors);
+                // Same rule as `room_cursors`: a loser is disposed before the
+                // drop, because its construction may already have spawned a
+                // repair task whose disposed re-check would otherwise pass
+                // forever.
+                if let Some(loser) = &loser {
+                    loser.dispose();
+                }
                 drop(loser);
                 match published {
                     Some(manager) => return Some(manager),
@@ -861,9 +877,15 @@ impl ChatContext {
     /// ending it fires observer callbacks, and an observer that answers by
     /// calling an accessor would rebuild into the cache just emptied (rule 5
     /// and forbidden order 4 on [`Self::shared_query`]). So the `ended` bit
-    /// goes up first, and after this returns every accessor answers `None`,
-    /// [`Self::write_session`] refuses without demanding, and the public
-    /// generation answers its frozen final number.
+    /// goes up first, and after this returns every QUERY AND CURSOR accessor
+    /// answers `None`, [`Self::write_session`] refuses without demanding, and
+    /// the public generation answers its frozen final number. The raw session
+    /// accessors — [`ChatContext::context`], [`ChatContext::viewer`] and
+    /// their untracked forms — are the deliberate exception: they have no
+    /// `None` to answer, and what they read is the HOST'S signal, whose
+    /// lifetime is the host's own (the boundary paragraph on
+    /// `Inner::generation` says exactly what survives). A handle kept past
+    /// teardown must not call them.
     fn discard_all(&self) {
         // The frozen number first, while the arena is still alive — cleanups
         // run before the owner's nodes drop, so this read is safe even if a
