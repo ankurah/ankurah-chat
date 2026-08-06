@@ -516,12 +516,23 @@ impl ChatContext {
     /// covers every affordance that never touches the composer. A signed-in
     /// reader meets neither.
     ///
+    /// ONE FOCUS ROUTE COSTS A CLICK. A focus this crate did not cause and
+    /// cannot attribute — your own code focusing the box, a screen reader's
+    /// browse-mode activation — raises the ceremony once, and is then
+    /// indistinguishable from the focus that belongs to a press already under
+    /// way. So after one of those, the reader's next CLICK on the box is
+    /// swallowed as that same demand's second route, and the click after it
+    /// raises. A tap is not swallowed: its focus arrives ahead of the press,
+    /// where the rule can see the new gesture. Every other route — a press, a
+    /// keystroke, a drop, arming a reply — marks itself, so whatever the reader
+    /// does next is answered.
+    ///
     /// MAKE THE CALLBACK IDEMPOTENT. A genuinely new gesture while the ceremony
     /// is already open raises it again — that is the point of the per-gesture
-    /// rule, since a reader who dismissed it and clicked again must get it back
-    /// — so a callback that opens a second popup, or restarts a redirect, on
-    /// being asked twice is the host's to make safe. Raising an already-open
-    /// ceremony should be a no-op.
+    /// rule, since a reader who dismissed it and clicked again must get it back,
+    /// the swallowed click above being the single exception — so a callback that
+    /// opens a second popup, or restarts a redirect, on being asked twice is the
+    /// host's to make safe. Raising an already-open ceremony should be a no-op.
     ///
     /// A host that set no callback gets a warning in the log and nothing else.
     /// It also gets no composer behaviour: taking the caret away from a reader

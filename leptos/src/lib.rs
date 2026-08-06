@@ -36,7 +36,11 @@
 //! box entirely rather than landing on it; and the box is `readonly` while they
 //! have no viewer, so no keystroke, paste, drop or IME composition reaches the
 //! draft. A reader therefore learns what is needed before composing rather than
-//! after.
+//! after. Once per gesture is exact but for one route: a focus this crate did
+//! not cause — a host focusing the box from its own code, a screen reader's
+//! browse-mode activation — raises once and then swallows the reader's next
+//! click as though it belonged to the same gesture. See
+//! [`ChatContext::demand_auth`], which states that in full.
 //!
 //! The DOWN transition is not the mirror of that: a session that drops to
 //! anonymous under a focused composer keeps its caret and whatever was already
