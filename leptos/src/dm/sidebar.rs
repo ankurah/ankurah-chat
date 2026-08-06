@@ -22,20 +22,18 @@
 
 use leptos::prelude::*;
 
-use ankurah::LiveQuery;
+use ankurah::EntityId;
+use ankurah_chat_model::DmThreadView;
 use ankurah_signals::Get as AnkurahGet;
-use ankurah_chat_model::{DmThreadView, UserView};
 
-use super::read_state::DmReadStateManager;
-use crate::context::{chat, Live};
+use crate::context::chat;
 use crate::{dm, fmt};
 
 #[component]
 pub fn DmSidebar(
-    #[prop(into)] threads: Live<LiveQuery<DmThreadView>>,
-    #[prop(into)] users: Live<LiveQuery<UserView>>,
-    selected_dm: RwSignal<Option<DmThreadView>>,
-    #[prop(into)] read_state: Live<DmReadStateManager>,
+    /// Which correspondent's conversation is open, by id. A conversation is
+    /// keyed on the person, not on the row representing it.
+    selected_dm: RwSignal<Option<EntityId>>,
 ) -> impl IntoView {
     // Nobody signed in means no conversations of one's own. The section still
     // renders — a host that laid out a rail gets its heading and an empty
@@ -45,7 +43,10 @@ pub fn DmSidebar(
     // must start seeing correspondents' names in rows this component may
     // already have built.
     let chat = chat();
-    let me = Signal::derive(move || chat.viewer());
+    let me = {
+        let chat = chat.clone();
+        Signal::derive(move || chat.viewer())
+    };
 
     // Duplicate threads from a concurrent first-DM race collapse to one row per
     // correspondent; conversations with no messages are hidden, and the rest
@@ -57,11 +58,11 @@ pub fn DmSidebar(
     // there would otherwise be filtered out of this list as empty — the
     // correspondent would simply disappear (see `dm::Conversation`).
     let rows = {
-        let threads = threads.clone();
-        let read_state = read_state.clone();
+        let chat = chat.clone();
         Signal::derive(move || {
-            let read_state = read_state.current();
-            let mut rows: Vec<(dm::Conversation, i64)> = dm::conversations(&threads.current().get())
+            let Some(read_state) = chat.dm_cursors() else { return Vec::new() };
+            let threads = chat.dm_threads().map(|q| q.get()).unwrap_or_default();
+            let mut rows: Vec<(dm::Conversation, i64)> = dm::conversations(&threads)
                 .into_iter()
                 .map(|conversation| {
                     let newest = conversation.rows.iter().map(|id| read_state.newest_ts(&id.to_base64())).max().unwrap_or(0);
@@ -99,20 +100,14 @@ pub fn DmSidebar(
                 // conversation (rows are grouped by participant pair), so this
                 // is still one stable key per sidebar entry.
                 key=|conversation: &dm::Conversation| conversation.rows.clone()
-                children={
-                    let users = users.clone();
-                    let read_state = read_state.clone();
-                    move |conversation: dm::Conversation| {
-                        view! {
-                            <DmListItem
-                                thread=conversation.canonical
-                                rows=conversation.rows
-                                users=users.clone()
-                                selected_dm=selected_dm
-                                read_state=read_state.clone()
-                                me=me
-                            />
-                        }
+                children=move |conversation: dm::Conversation| {
+                    view! {
+                        <DmListItem
+                            thread=conversation.canonical
+                            rows=conversation.rows
+                            selected_dm=selected_dm
+                            me=me
+                        />
                     }
                 }
             />
@@ -125,27 +120,25 @@ fn DmListItem(
     thread: DmThreadView,
     /// Every thread row this conversation is spread across (see
     /// `dm::Conversation`) — what the unread badge counts over.
-    rows: Vec<ankurah::EntityId>,
-    #[prop(into)] users: Live<LiveQuery<UserView>>,
-    selected_dm: RwSignal<Option<DmThreadView>>,
-    #[prop(into)] read_state: Live<DmReadStateManager>,
+    rows: Vec<EntityId>,
+    selected_dm: RwSignal<Option<EntityId>>,
     /// The reader, when there is one. Without one there is no "other
     /// participant" to name — and signing in mid-visit has to fill the name
     /// in, so this tracks rather than being read once.
-    me: Signal<Option<ankurah::EntityId>>,
+    me: Signal<Option<EntityId>>,
 ) -> impl IntoView {
-    let thread_id = thread.id().to_base64();
+    let chat = chat();
     let thread_for_partner = thread.clone();
     let partner = Signal::derive(move || me.get().and_then(|me| dm::partner_of(&thread_for_partner, me)));
 
     // Reactive: a rename retitles the row without a reload.
     let partner_name = {
-        let users = users.clone();
+        let chat = chat.clone();
         move || match partner.get() {
             Some(p) => {
-                let users = users.current();
-                let _ = users.get();
-                dm::display_name(&users, p)
+                let Some(members) = chat.members() else { return "Unknown".to_string() };
+                let _ = members.get();
+                dm::display_name(&members, p)
             }
             // A self-thread has no other participant. The UI never creates
             // one; naming it honestly beats rendering "Unknown".
@@ -155,16 +148,13 @@ fn DmListItem(
     let partner_name_for_initials = partner_name.clone();
     let hue = move || fmt::hue_class(&partner.get().map(|p| p.to_base64()).unwrap_or_default());
 
-    let thread_id_selected = thread_id.clone();
-    let is_selected = move || selected_dm.get().as_ref().map(|t| t.id().to_base64() == thread_id_selected).unwrap_or(false);
-
-    let thread_for_click = thread.clone();
+    let is_selected = move || selected_dm.get().is_some() && selected_dm.get() == partner.get();
     let row_keys: Vec<String> = rows.iter().map(|id| id.to_base64()).collect();
 
     view! {
         <div
             class=move || if is_selected() { "roomItem dmItem selected" } else { "roomItem dmItem" }
-            on:click=move |_| selected_dm.set(Some(thread_for_click.clone()))
+            on:click=move |_| selected_dm.set(partner.get_untracked())
         >
             <span class=move || format!("dmAvatar {}", hue()) aria-hidden="true">
                 {move || fmt::initials(&partner_name_for_initials())}
@@ -173,8 +163,8 @@ fn DmListItem(
             {move || {
                 // Across the pair's rows, for the same reason the sidebar's
                 // activity is: unread messages can be sitting in a race twin.
-                let read_state = read_state.current();
-                let unread_count: usize = row_keys.iter().map(|key| read_state.unread_count(key)).sum();
+                let unread_count: usize =
+                    chat.dm_cursors().map(|c| row_keys.iter().map(|key| c.unread_count(key)).sum()).unwrap_or(0);
                 (unread_count > 0).then(|| {
                     let badge_text = if unread_count >= 10 { "10+".to_string() } else { unread_count.to_string() };
                     view! { <span class="unreadBadge">{badge_text}</span> }

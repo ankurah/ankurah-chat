@@ -8,7 +8,9 @@ that want to put live chat surfaces in their own pages.
 
 - stands up its own ankurah node (typically an in-browser ephemeral node
   connected over websocket to a durable chat server) and hands these
-  components an `ankurah::Context`;
+  components a **signal** of its session — that `ankurah::Context` and who is
+  reading through it. The host owns that signal and is the only thing that
+  writes it;
 - owns sign-in entirely — components render read-only on an unauthenticated
   context, and the *send affordance* invokes a **host-provided callback**
   when auth is needed. Upgrading anonymous → authenticated must not remount
@@ -63,21 +65,57 @@ mount what you want:
 ```rust
 use ankurah_chat_leptos::{ChatContext, RoomLog, install_styles};
 
-ChatContext::new(context)              // your ankurah::Context
-    .viewer(Some(my_user_id))          // or leave it out: read-only
+// Your signal, holding your ankurah::Context and who is reading through it
+// (`None` for read-only). You own it; the components only read it.
+let session = RwSignal::new((context, Some(my_user_id)));
+
+ChatContext::new(session)
     .on_auth_demand(|| start_sign_in())
     .provide();
 install_styles();
 
-view! { <RoomLog room=selected_room users=members read_state=cursors /> }
+view! { <RoomLog room=room_id /> }
 ```
 
-`members` is a `LiveQuery<UserView>` and `cursors` a `ReadStateManager`, both
-built by you against the same context. Who the reader is comes from the
-handshake, not from a prop.
+**The surfaces take identifiers, not objects.** A room id, a correspondent's
+id — nothing else. The queries behind them, the members list, the read cursors:
+all of that belongs to the handshake, which builds it once per session and
+rebuilds it when the session moves. There is no query to construct, no manager
+to keep, and nothing to hand back in.
 
-The surfaces are `RoomSelector`, `RoomLog`, `Composer`, `DmSidebar` and
-`DmConversation`; mount any of them, in any combination.
+The surfaces are `RoomSelector` and `RoomLog` (both keyed on a room id),
+`Composer` (a `ComposerTarget` naming a room or a correspondent), and
+`DmSidebar` / `DmConversation` (keyed on a correspondent's id). Mount any of
+them, in any combination.
+
+Which rooms exist is the one predicate a host owns, and it is declared as data:
+`ChatContext::new(session).rooms_where("name = 'general'")`. It scopes the
+selector and the unread windows together.
+
+### On your side
+
+- **Adopt the pin family above.** ankurah-signals 0.9.0 holds js-sys/web-sys at
+  =0.3.82, and leptos 0.8.15+ demands ^0.3.85 through server_fn → wasm-streams.
+  The two cannot both be satisfied; raise both ends together or neither.
+- **Name a getrandom backend.** ankurah reaches getrandom transitively for
+  entity ids, and it refuses `wasm32-unknown-unknown` until something names a
+  backend. These crates declare the `wasm_js` feature for 0.3 and `js` for 0.2
+  on wasm targets, which is what the resolved versions need — but a
+  `.cargo/config.toml` does **not** travel with a dependency, so the
+  `getrandom_backend="wasm_js"` rustflag this repo sets for its own wasm checks
+  is not something you inherit. If your resolve lands on an early 0.3.x that
+  wants the cfg, set it in your own workspace:
+
+  ```toml
+  # <your workspace>/.cargo/config.toml
+  [target.wasm32-unknown-unknown]
+  rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
+  ```
+
+  (community does exactly this, in `leptos-app/.cargo/config.toml`.)
+- **Do not pass a `wasm` feature** — there isn't one. `ankurah/wasm` is enabled
+  by target, because no wasm build would want it off and forgetting it produces
+  a confusing failure deep inside ankurah-core.
 
 ### Theming
 
@@ -97,74 +135,69 @@ zero (its defaults use `:where`), so your value wins.
 
 ### Signing in mid-visit
 
-`ChatContext::set_session(context, viewer)` swaps the session under mounted
-components. Nothing unmounts, so the draft, the armed reply, the selected room,
-the open conversation and the message being edited all stay exactly as they
-were.
-
-Everything you handed in is scoped to a session too — the rooms list, the
-members list, the DM thread set, the two read-cursor managers — so all of it has
-to be rebuilt against the new context. Those props take a `Live`, so you swap
-what your signal holds and the components re-point in place:
+Set your session signal:
 
 ```rust
-// Hold what you hand in, so you can swap it.
-let members = RwSignal::new(SendWrapper::new(context.query::<UserView>("true")?));
-let cursors = RwSignal::new(SendWrapper::new(ReadStateManager::new(context.clone(), rooms, me)));
-
-view! {
-    <RoomLog
-        room=selected_room
-        users=Live::reactive(move || members.get().take())
-        read_state=Live::reactive(move || cursors.get().take())
-    />
-}
-
-// On sign-in — ALL OF IT IN ONE SYNCHRONOUS BLOCK. Each of these is a signal
-// write, and the components read between them if you let them: a swap split
-// across two ticks leaves a moment where the session says one reader and the
-// queries still answer for the other, which is a moment where a cursor can be
-// written to the wrong rows.
-let chat = ankurah_chat_leptos::chat();
-chat.set_session(new_context.clone(), Some(user_id));
-members.set(SendWrapper::new(new_context.query::<UserView>("true")?));
-cursors.set(SendWrapper::new(ReadStateManager::new(new_context, rooms, user_id)));
+session.set((new_context, Some(user_id)));
 ```
 
-A host with nothing to swap passes the value directly — `Live` is
-`#[prop(into)]`-friendly. A constant subscribes to nothing, though it is not
-free: each read runs the closure and clones the handle, which for a `LiveQuery`
-or a cursor manager is an `Arc` bump.
+That is the whole of it, and it is the only write path — the components never
+write that signal. Every read inside them takes the pair as one value, so
+nothing in there can see the new context beside the previous reader. **Set it
+as one value too.** A signal you derive from a context signal and a viewer
+signal, or an in-place `update` that moves the context now and the reader
+after, tears the pair before it ever reaches the components — and the session
+in between is precisely the mismatch that one value exists to rule out.
+
+Nothing unmounts, so the draft, the armed reply, the selected room, the open
+conversation and the message being edited all stay exactly as they were;
+everything scoped to the session — members, rooms, DM threads, both read-cursor
+managers — is rebuilt inside the handshake. You hold no query and no manager,
+so there is nothing to swap alongside it and no window where half the surfaces
+read through one session and half through another.
+
+Three moments follow your `.set()`, and only the last two wait for a tick.
+Everything session-scoped is keyed to a VERSION of your signal that recomputes
+on the first read after the set, so nothing can be handed out that pairs your
+new context with the departed session's queries — not even within that tick.
+The DISCARD, which disposes what the departed session built, is driven by an
+effect and lands a tick later (sooner, if a surface asks for something first).
+The REBUILD is later still: it happens when the components re-run on that
+version's notification and ask again.
+
+A write that had ALREADY passed its last check when the discard lands finishes
+— as itself, by the author who started it, against that session's own rows and
+through that session's context, however long its commit takes. That is the old
+session completing its own bookkeeping. No new work begins after the discard,
+and nothing keeps a manager or a flush alive for as long as some background
+task happens to hold it.
 
 One thing does not survive: the timeline's loaded window. A `ScrollManager`
 takes its context at construction and ankurah-virtual-scroll 0.9.0 cannot
 re-point one, so the pane rebuilds and the reader lands at the live tail rather
 than wherever they had paged back to.
 
-Then, on your side:
+The reader may CHANGE, not merely appear — signing in as somebody else is a
+legitimate swap. What the previous reader had selected stays in your signals,
+because those are yours; every write revalidates its author against the session
+before committing, and a conversation whose two ends have become the same
+person is refused rather than written.
 
-- **Adopt the pin family above.** ankurah-signals 0.9.0 holds js-sys/web-sys at
-  =0.3.82, and leptos 0.8.15+ demands ^0.3.85 through server_fn → wasm-streams.
-  The two cannot both be satisfied; raise both ends together or neither.
-- **Name a getrandom backend.** ankurah reaches getrandom transitively for
-  entity ids, and it refuses `wasm32-unknown-unknown` until something names a
-  backend. This crate declares the `wasm_js` feature for 0.3 and `js` for 0.2
-  on wasm targets, which is what the resolved versions need — but a
-  `.cargo/config.toml` does **not** travel with a dependency, so the
-  `getrandom_backend="wasm_js"` rustflag this repo sets for its own wasm checks
-  is not something you inherit. If your resolve lands on an early 0.3.x that
-  wants the cfg, set it in your own workspace:
+Handles the accessors give you (`chat.members()`, `chat.rooms()`, the cursor
+managers) are BORROWS of the session's, not things to park. Keep one past a
+swap and it goes on reading through a context the reader has left. Ask again;
+it is a cache lookup.
 
-  ```toml
-  # <your workspace>/.cargo/config.toml
-  [target.wasm32-unknown-unknown]
-  rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
-  ```
+If you would RATHER discard everything on sign-in — draft included — key the
+subtree on `chat.generation()` and Leptos will remount it for you. Both models
+work; neither is privileged.
 
-  (community does exactly this, in `leptos-app/.cargo/config.toml`.)
-- **Do not pass a `wasm` feature** — there isn't one. `ankurah/wasm` is enabled
-  by target, because no wasm build would want it off and forgetting it produces
-  a confusing failure deep inside ankurah-core.
+Unmounting the subtree the handshake was provided in ENDS it, terminally:
+teardown disposes everything the session built, and from that moment every
+accessor answers `None`, writes are refused without raising the auth demand,
+and `chat.generation()` answers its final number, frozen. A handle you kept
+past teardown is a handle to an ended handshake, not a way to keep using one —
+mount a new handshake instead.
 
 ## Status & trajectory
 

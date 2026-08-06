@@ -22,16 +22,15 @@
 
 use leptos::prelude::*;
 
-use ankurah::LiveQuery;
+use ankurah::EntityId;
+use ankurah_chat_model::{DmMessageView, MessageView};
 use ankurah_signals::Get as AnkurahGet;
-use ankurah_chat_model::{DmMessageView, DmThreadView, MessageView, UserView};
 
 use super::message_list::DmMessageList;
-use super::read_state::DmReadStateManager;
-use crate::composer::{Composer, ComposerTarget};
-use crate::context::{chat, Live};
-use crate::scroll_pane::ScrollPane;
+use crate::composer::{ComposerTarget, WiredComposer};
+use crate::context::chat;
 use crate::dm;
+use crate::scroll_pane::ScrollPane;
 
 /// A DM conversation: its timeline and its composer.
 ///
@@ -43,19 +42,14 @@ use crate::dm;
 /// have to disambiguate a component from a collection.
 #[component]
 pub fn DmConversation(
-    thread: RwSignal<Option<DmThreadView>>,
-    /// The reader's whole thread set, so an open conversation can be read
-    /// across every row its pair has (see [`crate::dm::pair_rows`]).
-    /// [`Live`], like the other host-supplied handles: signing in mid-visit
-    /// means a new query, and swapping it in place is what keeps this
-    /// conversation open across that.
+    /// Who the reader is talking to. A conversation is keyed on the PERSON,
+    /// not on the row that represents it — a first-message race can leave a
+    /// pair with two — so this component resolves the rows itself and reads
+    /// across all of them.
     #[prop(into)]
-    threads: Live<LiveQuery<DmThreadView>>,
-    #[prop(into)]
-    users: Live<LiveQuery<UserView>>,
-    #[prop(into)]
-    read_state: Live<DmReadStateManager>,
+    partner: Signal<Option<EntityId>>,
 ) -> impl IntoView {
+    let chat = chat();
     let pane = ScrollPane::<DmMessageView>::new();
     pane.install();
 
@@ -72,10 +66,13 @@ pub fn DmConversation(
     // A memo only notifies when the row set actually differs, so the effect is
     // back to tracking the selection.
     let rows = {
-        let threads = threads.clone();
-        Memo::new(move |_| match thread.get() {
-            Some(t) => dm::pair_rows(&threads.current().get(), &t),
-            None => Vec::new(),
+        let chat = chat.clone();
+        Memo::new(move |_| match (partner.get(), chat.viewer()) {
+            (Some(partner), Some(me)) => {
+                let threads = chat.dm_threads().map(|q| q.get()).unwrap_or_default();
+                dm::pair_rows(&threads, me, partner)
+            }
+            _ => Vec::new(),
         })
     };
 
@@ -105,18 +102,14 @@ pub fn DmConversation(
 
     let messages = pane.items;
 
-    let chat = chat();
     let partner_name = {
-        let users = users.clone();
+        let chat = chat.clone();
         Signal::derive(move || {
-            let Some(t) = thread.get() else { return String::new() };
+            let Some(partner) = partner.get() else { return String::new() };
+            let Some(members) = chat.members() else { return "Unknown".to_string() };
             // Track display-name edits: a rename retitles the open thread.
-            let _ = users.current().get();
-            // Tracked: signing in mid-visit has to name the correspondent.
-            match chat.viewer().and_then(|me| dm::partner_of(&t, me)) {
-                Some(partner) => dm::display_name(&users.current(), partner),
-                None => "Yourself".to_string(),
-            }
+            let _ = members.get();
+            dm::display_name(&members, partner)
         })
     };
 
@@ -125,12 +118,12 @@ pub fn DmConversation(
     // the sidebar's badge counts across all of them: leaving a twin's cursor
     // behind would leave a badge nothing can clear.
     let mark_read_at_tail = {
-        let read_state = read_state.clone();
+        let chat = chat.clone();
         move || {
             let Some(ts) = newest_timestamp(&messages.get_untracked()) else { return };
-            let read_state = read_state.current_untracked();
+            let Some(cursors) = chat.dm_cursors() else { return };
             for id in rows.get_untracked() {
-                read_state.mark_read(&id.to_base64(), ts);
+                cursors.mark_read(&id.to_base64(), ts);
             }
         }
     };
@@ -146,11 +139,9 @@ pub fn DmConversation(
 
     view! {
         {
-            let users = users.clone();
             let mark_read_at_tail = mark_read_at_tail.clone();
             move || {
-                let current_thread = thread.get()?;
-                let users = users.clone();
+                let current_partner = partner.get()?;
 
                 let handle_scroll = pane.scroll_handler(mark_read_at_tail.clone());
                 let handle_jump = {
@@ -177,11 +168,7 @@ pub fn DmConversation(
 
                         <div class="messagesContainer" node_ref=pane.container_ref on:scroll=handle_scroll>
                             <div class="messagesContent" node_ref=pane.content_ref>
-                                <DmMessageList
-                                    messages=messages
-                                    users=users.clone()
-                                    partner_name=partner_name
-                                />
+                                <DmMessageList messages=messages partner_name=partner_name />
                             </div>
                         </div>
 
@@ -196,8 +183,8 @@ pub fn DmConversation(
                             </button>
                         </Show>
 
-                        <Composer
-                            target=ComposerTarget::Dm(current_thread.clone())
+                        <WiredComposer
+                            target=ComposerTarget::Dm { partner: current_partner }
                             editing_message=editing_message
                             replying_to=replying_to
                             messages=no_room_messages

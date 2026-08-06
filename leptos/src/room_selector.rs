@@ -1,10 +1,11 @@
 //! The list of rooms, and the affordance for making a new one.
 //!
-//! Which rooms exist is the host's to decide — it hands in the LiveQuery, so a
-//! page can offer every room, three of them, or one. Which room is SELECTED is
-//! the host's too: this component writes the signal on a click and reads it to
-//! draw the highlight, and takes no view on what should be selected first or
-//! on whether that belongs in the page's URL.
+//! Which rooms exist is the host's to decide, as data: it declares an AnkQL
+//! predicate on the handshake ([`crate::ChatContextBuilder::rooms_where`]), so
+//! a page can offer every room or exactly one. Which room is SELECTED is the
+//! host's too — this component writes the id on a click and reads it to draw
+//! the highlight, and takes no view on what should be selected first or on
+//! whether that belongs in the page's URL.
 //!
 //! Rendered as two sibling elements — a header and a scrolling list — rather
 //! than one wrapper, so a host can put them inside whatever rail it already
@@ -14,23 +15,16 @@ use leptos::prelude::*;
 use web_sys::KeyboardEvent;
 
 use ankurah::model::Mutable;
-use ankurah::LiveQuery;
+use ankurah::EntityId;
 use ankurah_chat_model::{Room, RoomView};
 use ankurah_signals::Get as AnkurahGet;
 
-use crate::context::{chat, Live};
-use crate::read_state::ReadStateManager;
+use crate::context::chat;
 
 #[component]
 pub fn RoomSelector(
-    /// Which rooms to offer — the host's choice, and [`Live`] so it can be
-    /// swapped for one built against a new session without remounting.
-    #[prop(into)]
-    rooms: Live<LiveQuery<RoomView>>,
-    selected_room: RwSignal<Option<RoomView>>,
-    /// Unread badges. Omit for a selector that shows none.
-    #[prop(optional, into)]
-    read_state: Option<Live<ReadStateManager>>,
+    /// Which room is open, by id.
+    selected_room: RwSignal<Option<EntityId>>,
     /// Whether the rooms surface is the one the reader is looking at. A host
     /// that also mounts a DM panel passes "no conversation is open" here, so
     /// only one rail row can look selected at a time — a sidebar must not
@@ -40,22 +34,37 @@ pub fn RoomSelector(
     /// Called with the room just selected. A host with other surfaces uses
     /// this to close them.
     #[prop(optional)]
-    on_select: Option<Callback<RoomView>>,
+    on_select: Option<Callback<EntityId>>,
 ) -> impl IntoView {
     let is_creating = RwSignal::new(false);
-    let rooms_for_empty = rooms.clone();
-    // Making a room is a write, so the affordance is for a reader who is
-    // signed in. Read TRACKED, so signing in mid-visit makes it appear.
+    // Making a room needs a signed-in reader — read TRACKED, so signing in
+    // mid-visit makes the affordance appear — and a room set that is not
+    // curated. A host that narrowed `rooms_where` has said which rooms its
+    // page is about; a room created outside that predicate would vanish from
+    // this list the instant it was made, with no unread window behind it.
+    // Creating rooms belongs to the deployment's own app, not to an embed.
     let chat = chat();
     let can_create = {
         let chat = chat.clone();
-        move || chat.viewer().is_some()
+        move || chat.viewer().is_some() && !chat.rooms_narrowed()
     };
+
+    // An open input outlives the affordance that opened it unless something
+    // closes it: sign out with the name half typed and the "+" disappears
+    // while the field stays, offering a write nobody can make.
+    Effect::new({
+        let can_create = can_create.clone();
+        move |_| {
+            if !can_create() {
+                is_creating.set(false);
+            }
+        }
+    });
 
     view! {
         <div class="ankurah-chat sidebarHeader">
             <span class="sidebarTitle">"Rooms"</span>
-            <Show when=can_create>
+            <Show when=can_create.clone()>
                 <button class="createRoomButton" on:click=move |_| is_creating.set(true) title="Create new room">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
                         stroke-linecap="round" aria-hidden="true">
@@ -67,44 +76,41 @@ pub fn RoomSelector(
         </div>
 
         <div class="ankurah-chat roomList">
-            <Show when=move || is_creating.get()>
+            <Show when={
+                let can_create = can_create.clone();
+                // Both conditions, not just the flag: the effect above closes
+                // this on the next tick, and the render must not offer it in
+                // between.
+                move || is_creating.get() && can_create()
+            }>
                 <NewRoomInput selected_room=selected_room on_cancel=move || is_creating.set(false) />
             </Show>
 
-            <Show when=move || rooms_for_empty.current().get().is_empty()>
+            <Show when={
+                let chat = chat.clone();
+                move || chat.rooms().map(|q| q.get().is_empty()).unwrap_or(true)
+            }>
                 <div class="emptyRooms">"No rooms yet — press + to plant one."</div>
             </Show>
 
-            <RoomListUl rooms selected_room read_state active on_select />
+            <RoomListUl selected_room active on_select />
         </div>
     }
 }
 
 #[component]
 fn RoomListUl(
-    #[prop(into)] rooms: Live<LiveQuery<RoomView>>,
-    selected_room: RwSignal<Option<RoomView>>,
-    read_state: Option<Live<ReadStateManager>>,
+    selected_room: RwSignal<Option<EntityId>>,
     active: Option<Signal<bool>>,
-    on_select: Option<Callback<RoomView>>,
+    on_select: Option<Callback<EntityId>>,
 ) -> impl IntoView {
+    let chat = chat();
     view! {
         <For
-            each=move || rooms.current().get()
+            each=move || chat.rooms().map(|q| q.get()).unwrap_or_default()
             key=|room: &RoomView| room.id()
-            children={
-                let read_state = read_state.clone();
-                move |room: RoomView| {
-                    view! {
-                        <RoomItem
-                            room=room
-                            selected_room=selected_room
-                            read_state=read_state.clone()
-                            active=active
-                            on_select=on_select
-                        />
-                    }
-                }
+            children=move |room: RoomView| {
+                view! { <RoomItem room=room selected_room=selected_room active=active on_select=on_select /> }
             }
         />
     }
@@ -113,43 +119,36 @@ fn RoomListUl(
 #[component]
 fn RoomItem(
     room: RoomView,
-    selected_room: RwSignal<Option<RoomView>>,
-    read_state: Option<Live<ReadStateManager>>,
+    selected_room: RwSignal<Option<EntityId>>,
     active: Option<Signal<bool>>,
-    on_select: Option<Callback<RoomView>>,
+    on_select: Option<Callback<EntityId>>,
 ) -> impl IntoView {
-    let room_id = room.id().to_base64();
+    let chat = chat();
+    let room_id = room.id();
+    let room_id_badge = room_id.to_base64();
     let name = room.name().unwrap_or_default();
 
-    let room_id_selected = room_id.clone();
-    let is_selected = move || {
-        active.map(|a| a.get()).unwrap_or(true)
-            && selected_room.get().as_ref().map(|r| r.id().to_base64() == room_id_selected).unwrap_or(false)
-    };
-
-    let room_for_click = room.clone();
-    let room_id_badge = room_id.clone();
+    let is_selected =
+        move || active.map(|a| a.get()).unwrap_or(true) && selected_room.get() == Some(room_id);
 
     view! {
         <div
             class=move || if is_selected() { "roomItem selected" } else { "roomItem" }
             on:click=move |_| {
-                let room = room_for_click.clone();
-                selected_room.set(Some(room.clone()));
+                selected_room.set(Some(room_id));
                 if let Some(on_select) = on_select {
-                    on_select.run(room);
+                    on_select.run(room_id);
                 }
             }
         >
             <span class="roomHash" aria-hidden="true">"#"</span>
             <span class="roomLabel">{name}</span>
             {
-                let read_state = read_state.clone();
                 move || {
                     // Reactive read: re-renders as messages arrive, or as the
                     // reader's persistent cursor advances on any of their
                     // devices.
-                    let unread_count = read_state.as_ref().map(|rs| rs.current().unread_count(&room_id_badge)).unwrap_or(0);
+                    let unread_count = chat.room_cursors().map(|c| c.unread_count(&room_id_badge)).unwrap_or(0);
                     (unread_count > 0).then(|| {
                         let badge_text = if unread_count >= 10 { "10+".to_string() } else { unread_count.to_string() };
                         view! { <span class="unreadBadge">{badge_text}</span> }
@@ -161,7 +160,7 @@ fn RoomItem(
 }
 
 #[component]
-fn NewRoomInput(selected_room: RwSignal<Option<RoomView>>, on_cancel: impl Fn() + Clone + 'static) -> impl IntoView {
+fn NewRoomInput(selected_room: RwSignal<Option<EntityId>>, on_cancel: impl Fn() + Clone + 'static) -> impl IntoView {
     let room_name = RwSignal::new(String::new());
     let chat = chat();
 
@@ -192,7 +191,7 @@ fn NewRoomInput(selected_room: RwSignal<Option<RoomView>>, on_cancel: impl Fn() 
                     .await
                     {
                         Ok(room) => {
-                            selected_room.set(Some(room));
+                            selected_room.set(Some(room.id()));
                             on_cancel();
                         }
                         Err(e) => {

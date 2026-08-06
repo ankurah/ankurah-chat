@@ -29,8 +29,9 @@ pub fn MessageContextMenu(
     // offered only where the host said what it means (see
     // `ChatHooks::moderator_delete`). Gating here is presentation: the server's
     // write policy is what actually decides.
-    // Taken once, here: the handlers below run with no reactive owner, and
-    // two of them defer into a future on top of that.
+    // Taken once, here, and cloned into the handlers: two of them defer into a
+    // future, where the handshake cannot be resolved at all. Hoisting is by
+    // construction rather than by knowing which handler defers.
     let chat = chat();
     let can_moderate_delete = !is_own && chat.can_moderate() && chat.hooks().moderator_delete.is_some();
     let can_delete = is_own || can_moderate_delete;

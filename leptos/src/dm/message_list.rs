@@ -22,18 +22,17 @@ use std::collections::HashMap;
 
 use leptos::prelude::*;
 
-use ankurah::{LiveQuery, View as _};
-use ankurah_chat_model::{DmMessageView, UserView};
+use ankurah::View as _;
+use ankurah_chat_model::DmMessageView;
 use ankurah_signals::Get as AnkurahGet;
 
-use crate::context::{chat, Live};
+use crate::context::chat;
 use crate::fmt;
 
 /// The thread's messages, grouped by author and day.
 #[component]
 pub fn DmMessageList(
     #[prop(into)] messages: Signal<Vec<DmMessageView>>,
-    #[prop(into)] users: Live<LiveQuery<UserView>>,
     /// Who the reader is talking to — for the empty state.
     #[prop(into)] partner_name: Signal<String>,
 ) -> impl IntoView {
@@ -41,18 +40,21 @@ pub fn DmMessageList(
     // own `User` row resolves asynchronously, and a thread that waited for it
     // rendered the reader's own messages as their correspondent's.
     let chat = chat();
-    let viewer = Signal::derive(move || chat.viewer().map(|id| id.to_base64()));
+    let viewer = {
+        let chat = chat.clone();
+        Signal::derive(move || chat.viewer().map(|id| id.to_base64()))
+    };
     // Mention rendering: one id → display-name map shared by every row,
     // rebuilt when any display name changes. DM text carries the same `<@id>`
     // tokens room text does and renders them the same way. Whether a server
     // notifies the member named inside a private conversation is that
     // server's affair.
     let mention_names = Memo::new({
-        let users = users.clone();
+        let chat = chat.clone();
         move |_| {
-            users
-                .current()
-                .get()
+            chat.members()
+                .map(|q| q.get())
+                .unwrap_or_default()
                 .iter()
                 .filter_map(|u| {
                     let name = u.display_name().unwrap_or_default();
@@ -112,12 +114,10 @@ pub fn DmMessageList(
                     )
                 }
                 children={
-                    let users = users.clone();
                     move |(flags, message, viewer)| {
                         view! {
                             <DmMessageRow
                                 message=message
-                                users=users.clone()
                                 current_user_id=viewer
                                 first_in_group=flags.first_in_group
                                 day_label=flags.day_label
@@ -135,7 +135,6 @@ pub fn DmMessageList(
 #[component]
 fn DmMessageRow(
     message: DmMessageView,
-    #[prop(into)] users: Live<LiveQuery<UserView>>,
     current_user_id: Option<String>,
     first_in_group: bool,
     last_in_group: bool,
@@ -146,12 +145,12 @@ fn DmMessageRow(
     let is_own_message = current_user_id.as_deref() == Some(author_user_id.as_str());
 
     let author_name = {
-        let users = users.clone();
+        let chat = chat();
         let author_user_id = author_user_id.clone();
         move || {
-            users
-                .current()
-                .get()
+            chat.members()
+                .map(|q| q.get())
+                .unwrap_or_default()
                 .iter()
                 .find(|u| u.id().to_base64() == author_user_id)
                 .map(|u| u.display_name().unwrap_or_default())

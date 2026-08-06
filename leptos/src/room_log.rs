@@ -1,13 +1,12 @@
 use leptos::prelude::*;
 
-use ankurah::LiveQuery;
-use ankurah_chat_model::{MessageView, RoomView, UserView};
+use ankurah::EntityId;
+use ankurah_chat_model::MessageView;
 
-use crate::composer::{Composer, ComposerTarget};
-use crate::context::Live;
+use crate::composer::{ComposerTarget, WiredComposer};
+use crate::context::chat;
 use crate::debug_header::TimelineDebugHeader;
 use crate::message_list::MessageList;
-use crate::read_state::ReadStateManager;
 use crate::scroll_pane::ScrollPane;
 
 /// One room's timeline, with its composer underneath.
@@ -18,23 +17,18 @@ use crate::scroll_pane::ScrollPane;
 /// is specific to a room: the room predicate, the reply and edit state the
 /// composer and the rows share, and the read cursor.
 ///
-/// Mountable on its own. A page that shows exactly one room hands the same
-/// `RoomView` in every time and never mounts a [`crate::RoomSelector`] at all.
+/// Mountable on its own. A page that shows exactly one room passes that room's
+/// id and never mounts a [`crate::RoomSelector`] at all.
+///
+/// It takes an ID, not a room. Everything it needs beyond the id — the members
+/// list for author names, the read cursors — comes from the handshake, which
+/// owns them for the session and rebuilds them when the session moves. A host
+/// holds an id and nothing else.
 #[component]
 pub fn RoomLog(
-    room: RwSignal<Option<RoomView>>,
-    /// The members query, for author names and mention rendering. Owned by the
-    /// host rather than created here: this component remounts whenever the
-    /// reader switches rooms or moves to a conversation, and a per-mount
-    /// LiveQuery would mean a per-mount registration nothing ever releases.
-    /// [`Live`] so a host can swap it for one built against a new session
-    /// without remounting this.
+    /// Which room to show, or none for the empty state.
     #[prop(into)]
-    users: Live<LiveQuery<UserView>>,
-    /// The reader's room cursors. `Live` for the same reason: they are scoped
-    /// to one reader, so signing in means a new manager.
-    #[prop(into)]
-    read_state: Live<ReadStateManager>,
+    room: Signal<Option<EntityId>>,
     /// Whether to offer the timeline's diagnostic header — scroll mode,
     /// pagination flags, item count — behind a small toggle. Off by default:
     /// an embedded panel has no use for it.
@@ -48,6 +42,7 @@ pub fn RoomLog(
     // read and write it.
     let replying_to = RwSignal::new(None::<MessageView>);
 
+    let chat = chat();
     let pane = ScrollPane::<MessageView>::new();
     pane.install();
 
@@ -55,10 +50,10 @@ pub fn RoomLog(
     // host swaps the session, since `set_source` reads the ankurah context
     // tracked.
     Effect::new(move |_| {
-        let predicate = room.get().map(|current_room| {
+        let predicate = room.get().map(|room_id| {
             // Deleted messages are deliberately NOT filtered out: they render
             // as tombstone rows, so the scroll timeline keeps its shape.
-            crate::queries::predicate("room = ?", [(&current_room.id()).into()]).expect("static message predicate parses")
+            crate::queries::predicate("room = ?", [(&room_id).into()]).expect("static message predicate parses")
         });
         pane.set_source(predicate, "timestamp DESC");
     });
@@ -68,8 +63,8 @@ pub fn RoomLog(
     // A reply armed in one room must not attach to a message sent from
     // another: an actual room CHANGE disarms it. `prev` carries the previous
     // room id so re-selecting the same room keeps the chip.
-    Effect::new(move |prev: Option<Option<String>>| {
-        let id = room.get().map(|r| r.id().to_base64());
+    Effect::new(move |prev: Option<Option<EntityId>>| {
+        let id = room.get();
         if let Some(prev) = prev {
             if prev != id {
                 replying_to.set(None);
@@ -83,10 +78,11 @@ pub fn RoomLog(
     // while live (this effect tracks `messages`). A scrolled-up reader keeps
     // their cursor — browsing history marks nothing read.
     let mark_read_at_tail = {
-        let read_state = read_state.clone();
+        let chat = chat.clone();
         move || {
-            if let (Some(r), Some(ts)) = (room.get_untracked(), newest_timestamp(&messages.get_untracked())) {
-                read_state.current_untracked().mark_read(&r.id().to_base64(), ts);
+            let Some(cursors) = chat.room_cursors() else { return };
+            if let (Some(room_id), Some(ts)) = (room.get_untracked(), newest_timestamp(&messages.get_untracked())) {
+                cursors.mark_read(&room_id.to_base64(), ts);
             }
         }
     };
@@ -125,11 +121,9 @@ pub fn RoomLog(
             }
         >
             {
-                let users = users.clone();
                 let mark_read_at_tail = mark_read_at_tail.clone();
                 move || {
                     let current_room = room.get()?;
-                    let users = users.clone();
 
                     let handle_scroll = pane.scroll_handler(mark_read_at_tail.clone());
                     let handle_jump = {
@@ -166,7 +160,6 @@ pub fn RoomLog(
                                 <div class="messagesContent" node_ref=pane.content_ref>
                                     <MessageList
                                         messages=messages
-                                        users=users.clone()
                                         editing_message=editing_message
                                         replying_to=replying_to
                                     />
@@ -184,8 +177,8 @@ pub fn RoomLog(
                                 </button>
                             </Show>
 
-                            <Composer
-                                target=ComposerTarget::Room(current_room.clone())
+                            <WiredComposer
+                                target=ComposerTarget::Room(current_room)
                                 editing_message=editing_message
                                 replying_to=replying_to
                                 messages=messages
