@@ -65,7 +65,10 @@ fn a_set_is_visible_to_the_very_next_read() {
 }
 
 #[test]
-fn sets_in_one_tick_coalesce_to_the_last_of_them() {
+fn sets_with_no_generation_read_between_them_coalesce_to_the_last() {
+    // Named for the real boundary: a GENERATION read is what observes a
+    // session, not a tick. Ticks could pass between these two sets and the
+    // next read would still recompute exactly once.
     let owner = Owner::new();
     owner.set();
 

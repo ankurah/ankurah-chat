@@ -576,6 +576,14 @@ impl ChatContext {
             // recomputes on that read, so a set landed anywhere in this call is
             // seen here, before anything is built from the halves.
             let Some(next) = self.crossed(generation) else {
+                // `crossed` also answers `None` for an ENDED handshake, where
+                // "unchanged" would be the wrong reading: `rooms()` above can
+                // run an observer that tears the owner down synchronously, and
+                // the session read below would then reach the host's dropped
+                // arena slot. Ended is re-asked by name before anything raw.
+                if self.0.ended.get() {
+                    return None;
+                }
                 let manager = ReadStateManager::try_new(self.context_untracked(), rooms, viewer)?;
                 let (published, loser) = self.publish(generation, manager, |shared| &mut shared.room_cursors);
                 drop(loser);
@@ -610,6 +618,11 @@ impl ChatContext {
             let threads = self.dm_threads()?;
             let viewer = self.viewer_untracked()?;
             let Some(next) = self.crossed(generation) else {
+                // Same re-ask as `room_cursors`: `crossed`'s `None` covers the
+                // ended handshake too, and the read below must not run then.
+                if self.0.ended.get() {
+                    return None;
+                }
                 let manager = DmReadStateManager::try_new(self.context_untracked(), threads, viewer)?;
                 let (published, loser) = self.publish(generation, manager, |shared| &mut shared.dm_cursors);
                 drop(loser);
@@ -730,6 +743,14 @@ impl ChatContext {
                 return Some(existing);
             }
 
+            // `discard_stale` can run an observer (dropped registrations tell
+            // them), and an observer can tear the owner down synchronously —
+            // after which `peek`'s miss reads like an ordinary cache miss and
+            // the session read below would reach the host's dropped arena
+            // slot. Re-ask by name before anything raw.
+            if self.0.ended.get() {
+                return None;
+            }
             let query = match self.context_untracked().query::<R>(predicate) {
                 Ok(query) => query,
                 Err(e) => {
@@ -758,6 +779,15 @@ impl ChatContext {
             let registration = query_registry::register(label, &published);
             let orphan = self.attach_registration(generation, registration, slot);
             drop(orphan);
+            // The observer may have torn the owner down synchronously. The
+            // query in hand was already taken out and ended by that teardown,
+            // and a caller like `room_cursors` would follow a returned query
+            // straight into a raw session read — so an ended handshake answers
+            // `None` here, which is also the only answer the README promises
+            // after teardown.
+            if self.0.ended.get() {
+                return None;
+            }
             // (3) The observer may have moved the session out from under this.
             if let Some(next) = self.crossed(generation) {
                 generation = next;
