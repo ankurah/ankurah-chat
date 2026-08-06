@@ -205,6 +205,14 @@ fn mention_candidates(users: &[UserView], query: &str) -> Vec<UserView> {
 /// "Replying to …" chip sits above the input and the send attaches the
 /// referenced message as `re`.
 ///
+/// AN ANONYMOUS READER NEVER GETS A CARET HERE. Focusing the box raises the
+/// host's auth-demand callback — once per gesture — and the focus is taken
+/// straight back, so there is never a guest-typed draft to strand. A send
+/// demands too, for every route to Send that skipped the box. A signed-in
+/// reader meets neither, and a host that installed no callback keeps the older
+/// behaviour: the box takes focus, and the send is refused with a warning in
+/// the log.
+///
 /// The draft holds plain `@DisplayName` text, never raw tokens: the
 /// autocomplete inserts the name, send re-encodes matching `@Name` runs to the
 /// canonical `<@id>` token (see
@@ -249,6 +257,107 @@ pub(crate) fn WiredComposer(
     let can_send = {
         let is_connected = is_connected.clone();
         move || !message_input.get().trim().is_empty() && is_connected()
+    };
+
+    // WHETHER REACHING FOR THIS BOX RAISES THE HOST'S SIGN-IN CEREMONY INSTEAD
+    // OF OPENING A CARET.
+    //
+    // A reader with no viewer never gets a caret here: the demand goes up the
+    // moment they reach for the box, so there is never a guest-typed draft to
+    // strand, and they learn what is needed before composing rather than after.
+    //
+    // Both halves of the test are load-bearing. The viewer is read through the
+    // TRACKED accessor, so a reader who signs in mid-visit — the host sets its
+    // session signal and nothing remounts — has a live message box on the very
+    // next gesture, with the same DOM node, the same node_ref and the same
+    // listeners. And a host that installed no auth-demand callback keeps
+    // exactly the behaviour it had before this existed: taking the caret away
+    // with no ceremony to put in its place is a dead end, so the whole gate
+    // stands down and the send path refuses as it always did.
+    let demand_instead_of_caret = {
+        let chat = chat.clone();
+        move || !chat.is_authenticated() && chat.can_demand_auth()
+    };
+
+    // ONE DEMAND PER GESTURE.
+    //
+    // Three listeners, because one gesture can reach a textarea by more than
+    // one route and the demand must go up exactly once whichever route it took:
+    //
+    //   pointerdown — the first event of any tap or click, ahead of mousedown
+    //                 and ahead of focus in every engine. It says a NEW GESTURE
+    //                 HAS BEGUN, which lowers the latch, and then demands.
+    //   mousedown   — prevent_default, so the caret never lands at all. The
+    //                 same trick the autocomplete popups below use to KEEP
+    //                 focus, pointed the other way.
+    //   focus       — the belt: Tab, a programmatic focus (arming a reply calls
+    //                 `el.focus()`), and any engine where the prevent_default
+    //                 above did not stop focus. It blurs FIRST and demands
+    //                 after, so the host's popup opens with nothing focused and
+    //                 has no message box to hand focus back to on close.
+    //
+    // THE LATCH RULE, exactly: `demanded` goes UP the instant a demand is
+    // raised, and comes DOWN only on a pointerdown on this textarea. So the
+    // second route of one gesture finds it up and stays quiet, and the refocus
+    // a closing popup hands back — a focus with no pointerdown before it —
+    // finds it up too, however long the ceremony took. That is why the rule is
+    // keyed to the gesture and not to elapsed time: a ceremony can sit open for
+    // a minute, and every timeout short enough to let the next real click
+    // through is far too short to still be running when it closes. A genuinely
+    // new click begins with a pointerdown, which lowers the latch, and demands
+    // again.
+    //
+    // WHAT THE RULE DELIBERATELY SWALLOWS: a Tab INTO the box that follows an
+    // earlier demand, since no pointerdown precedes it — the reader is blurred
+    // in silence. Closing that would take a document-level key listener per
+    // composer, to see a Tab pressed on whatever element had focus; a reader
+    // who tabs in and gets nothing can click, and the send path demands
+    // regardless.
+    //
+    // Per-mount state, so a host that keys its subtree on `chat.generation()`
+    // gets a fresh latch along with the fresh composer.
+    let demanded = StoredValue::new(false);
+    let demand_once = {
+        let chat = chat.clone();
+        move || {
+            if demanded.get_value() {
+                return;
+            }
+            demanded.set_value(true);
+            chat.demand_auth();
+        }
+    };
+    let demand_on_press = {
+        let demand_instead_of_caret = demand_instead_of_caret.clone();
+        let demand_once = demand_once.clone();
+        move |_| {
+            if !demand_instead_of_caret() {
+                return;
+            }
+            demanded.set_value(false);
+            demand_once();
+        }
+    };
+    let refuse_caret = {
+        let demand_instead_of_caret = demand_instead_of_caret.clone();
+        move |e: leptos::ev::MouseEvent| {
+            if demand_instead_of_caret() {
+                e.prevent_default();
+            }
+        }
+    };
+    let demand_on_focus = {
+        let demand_instead_of_caret = demand_instead_of_caret.clone();
+        let demand_once = demand_once.clone();
+        move |_| {
+            if !demand_instead_of_caret() {
+                return;
+            }
+            if let Some(el) = textarea_ref.get_untracked() {
+                let _ = el.blur();
+            }
+            demand_once();
+        }
     };
 
     // Mention autocomplete draws on the handshake's members query — the same
@@ -973,6 +1082,13 @@ pub(crate) fn WiredComposer(
                         mention_draft.set(None);
                         emoji_draft.set(None);
                     }
+                    // An anonymous reader gets the host's sign-in ceremony
+                    // rather than a caret. All three are no-ops for a signed-in
+                    // reader, and for a host that installed no callback; see
+                    // the latch rule above them.
+                    on:pointerdown=demand_on_press
+                    on:mousedown=refuse_caret
+                    on:focus=demand_on_focus
                     prop:disabled=move || !is_connected()
                 ></textarea>
                 <Show when=move || editing_message.get().is_some()>
@@ -999,6 +1115,14 @@ pub(crate) fn WiredComposer(
 /// Everything it needs is the target: a room id, or a correspondent's id.
 /// Mount it where there is no timeline above it — a page that only offers
 /// "message me" is one composer and nothing else.
+///
+/// A reader with no viewer gets the host's sign-in ceremony the moment they
+/// reach for the box rather than a caret, so a standalone composer on a public
+/// page is an invitation to sign in and never a draft that cannot be sent. The
+/// send demands as well. Both want
+/// [`crate::ChatContextBuilder::on_auth_demand`]; with no callback installed
+/// the box takes focus as it always did and the send is refused with a warning
+/// in the log.
 ///
 /// What a standalone composer does NOT do is edit. Editing and replying are
 /// things a reader starts FROM a message, and there is no message on screen to

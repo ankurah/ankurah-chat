@@ -12,9 +12,11 @@ that want to put live chat surfaces in their own pages.
   reading through it. The host owns that signal and is the only thing that
   writes it;
 - owns sign-in entirely — components render read-only on an unauthenticated
-  context, and the *send affordance* invokes a **host-provided callback**
-  when auth is needed. Upgrading anonymous → authenticated must not remount
-  or lose state;
+  context, and reaching for the message box invokes a **host-provided
+  callback**: an anonymous reader who *focuses* the composer gets the host's
+  sign-in ceremony rather than a caret, and an anonymous *send* raises the same
+  callback for every route to it that skipped the box. A signed-in reader meets
+  neither. Upgrading anonymous → authenticated must not remount or lose state;
 - mounts surfaces independently: room selector, room log, composer, and the
   DM thread view are separately embeddable (a host can show a single room,
   or just a DM panel, without the rest).
@@ -76,6 +78,15 @@ install_styles();
 
 view! { <RoomLog room=room_id /> }
 ```
+
+`on_auth_demand` is the whole of what an anonymous reader meets. **Focusing the
+composer raises it** — once per gesture, with the focus handed straight back,
+so nobody types a draft they cannot send — and so does a **send** that reached
+the button without the box ever having been focused, along with every other
+write (a reaction, creating a room, opening a conversation). A signed-in reader
+meets none of it. Install no callback and the focus behaviour does not exist
+either: the composer takes focus as it always did, and the send is refused with
+a warning in the log rather than a ceremony.
 
 **The surfaces take identifiers, not objects.** A room id, a correspondent's
 id — nothing else. The queries behind them, the members list, the read cursors:
@@ -148,6 +159,10 @@ as one value too.** A signal you derive from a context signal and a viewer
 signal, or an in-place `update` that moves the context now and the reader
 after, tears the pair before it ever reaches the components — and the session
 in between is precisely the mismatch that one value exists to rule out.
+
+The composer goes live in place: it reads the viewer on each gesture rather
+than at mount, so the same textarea that was demanding a sign-in a moment ago
+takes a caret on the next click — same element, same listeners, nothing rebuilt.
 
 Nothing unmounts, so the draft, the armed reply, the selected room, the open
 conversation and the message being edited all stay exactly as they were;

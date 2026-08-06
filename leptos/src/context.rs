@@ -18,9 +18,12 @@
 //!
 //! The session is the HOST'S OWN SIGNAL, handed in at mount and only ever read
 //! from here. A host may open on an anonymous context — the components render,
-//! the timeline fills, the composer refuses to send and calls the host's
-//! auth-demand callback instead — and then, once the reader signs in, set that
-//! signal to the authenticated context and the reader's id:
+//! the timeline fills, and the composer calls the host's auth-demand callback
+//! instead of opening a draft: an anonymous reader who FOCUSES the message box
+//! raises the demand there and then, and an anonymous send raises it too (see
+//! [`ChatContext::demand_auth`]). A signed-in reader meets neither. Then, once
+//! the reader signs in, the host sets that signal to the authenticated context
+//! and the reader's id:
 //!
 //! ```ignore
 //! let session = RwSignal::new((anonymous_context, None));
@@ -442,7 +445,10 @@ impl ChatContext {
     pub fn viewer_untracked(&self) -> Option<EntityId> { self.0.session.with_untracked(|(_, viewer)| *viewer) }
 
     /// Whether someone is signed in, tracked. Drives the composer's choice
-    /// between sending and calling [`Self::demand_auth`].
+    /// between opening a draft and calling [`Self::demand_auth`] — on focus,
+    /// and again at send. TRACKED is what makes signing in mid-visit enough on
+    /// its own: the composer re-reads this on the next gesture, so a reader who
+    /// signs in gets a live message box without anything remounting.
     pub fn is_authenticated(&self) -> bool { self.viewer().is_some() }
 
     /// Take the handle a deferred write needs, or raise the auth demand.
@@ -451,6 +457,12 @@ impl ChatContext {
     /// and move the result into the future that does the work. Returning
     /// `None` means nobody is signed in; the host has been asked to fix that
     /// and the caller should simply stop.
+    ///
+    /// THE COMPOSER DEMANDING ON FOCUS DOES NOT REPLACE THIS. Most writes never
+    /// go near the message box at all — a reaction, an author's own delete,
+    /// opening a conversation, creating a room — and the box's own Send button
+    /// is reachable by pointer and by Tab without the textarea ever having been
+    /// focused. Every write asks here, whatever raised the demand earlier.
     pub fn write_session(&self) -> Option<WriteSession> {
         // An ended handshake refuses without demanding: the surface is gone,
         // so there is nobody to sign in — and the signal read below would
@@ -468,16 +480,39 @@ impl ChatContext {
         }
     }
 
-    /// Ask the host to sign the reader in. Called when an anonymous reader
-    /// reaches for an affordance that writes. A host that set no callback
-    /// gets a warning in the log and nothing else — the write is refused
-    /// either way.
+    /// Ask the host to sign the reader in.
+    ///
+    /// TWO MOMENTS RAISE IT, and only for a reader with no viewer. FOCUS: an
+    /// anonymous reader who reaches for the message box gets the host's sign-in
+    /// ceremony instead of a caret, so there is never a guest-typed draft to
+    /// strand — the composer takes the focus straight back and demands, once
+    /// per gesture. WRITE: [`Self::write_session`] demands for anything that
+    /// would commit, which covers every affordance that never touches the
+    /// composer and every route to Send that skipped the textarea. A signed-in
+    /// reader meets neither.
+    ///
+    /// A host that set no callback gets a warning in the log and nothing else.
+    /// It also gets no focus behaviour: taking the caret away from a reader with
+    /// no ceremony to offer instead would be a dead end, so the composer asks
+    /// whether a callback exists at all before it interferes, and leaves an
+    /// anonymous reader free to type into a box whose send is still refused
+    /// here.
     pub fn demand_auth(&self) {
         match &self.0.demand_auth {
             Some(demand) => demand(),
             None => tracing::warn!("a write was attempted with no reader signed in, and the host set no auth-demand callback"),
         }
     }
+
+    /// Whether the host installed an auth-demand callback at all.
+    ///
+    /// What it is for: an affordance that would change SHAPE for an anonymous
+    /// reader rather than merely refuse. Refusing needs nothing — the write
+    /// simply does not happen — but the composer's focus demand replaces the
+    /// caret with the host's ceremony, and with no ceremony installed that is a
+    /// message box a reader cannot focus and is told nothing about. So the
+    /// focus path stands down here and behaves as it did before it existed.
+    pub(crate) fn can_demand_auth(&self) -> bool { self.0.demand_auth.is_some() }
 
     /// Whether the transport is up, tracked. False disables the composer.
     pub fn online(&self) -> bool { (self.0.online)() }
@@ -1077,9 +1112,16 @@ impl ChatContextBuilder {
         self
     }
 
-    /// What to do when an anonymous reader reaches for something that writes.
-    /// The host owns sign-in entirely; this is the whole of what the
-    /// components know about it.
+    /// What to do when an anonymous reader reaches for the message box, or for
+    /// something that writes. The host owns sign-in entirely; this is the whole
+    /// of what the components know about it.
+    ///
+    /// OPTIONAL, and its absence is not merely a missing prompt: with no
+    /// callback here the composer does not take focus away from an anonymous
+    /// reader either, because there would be nothing to offer in its place.
+    /// Such a host keeps exactly the behaviour it had before the focus demand
+    /// existed — a message box anyone may type into, whose send is refused with
+    /// a warning in the log. See [`ChatContext::demand_auth`].
     pub fn on_auth_demand(mut self, demand: impl Fn() + 'static) -> Self {
         self.demand_auth = Some(Box::new(demand));
         self

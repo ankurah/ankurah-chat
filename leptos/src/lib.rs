@@ -30,6 +30,12 @@
 //! the handshake itself must be taken where a reactive owner exists; see the
 //! [`context`] module.
 //!
+//! The composer asks EARLIER as well: an anonymous reader who focuses the
+//! message box raises the same callback there, once per gesture, and the
+//! composer takes the focus straight back instead of opening a caret — so a
+//! reader learns what is needed before composing rather than after. The send
+//! demand above stays regardless, and a signed-in reader meets neither.
+//!
 //! # What a host provides
 //!
 //! An [`ankurah::Context`], through [`ChatContext`]. This crate creates no
