@@ -30,6 +30,31 @@
 //! the handshake itself must be taken where a reactive owner exists; see the
 //! [`context`] module.
 //!
+//! The composer asks EARLIER as well. A reader with no viewer who presses on
+//! the message box raises the same callback there, once per gesture, and the
+//! composer drops the focus rather than opening a caret; their Tab skips the
+//! box entirely rather than landing on it; and the box is `readonly` while they
+//! have no viewer, so no keystroke, paste, drop or IME composition reaches the
+//! draft. A reader therefore learns what is needed before composing rather than
+//! after. Once per gesture has one exception here, and a second for a host that
+//! turns `leptos/delegation` on. Here: a focus this crate did not cause — a host
+//! focusing the box from its own code, a screen reader's browse-mode activation
+//! — raises once and then swallows the reader's next click as though it
+//! belonged to the same gesture. See [`ChatContext::demand_auth`], which states
+//! that one and the delegation one in full.
+//!
+//! The DOWN transition is not the mirror of that: a session that drops to
+//! anonymous under a focused composer keeps its caret and whatever was already
+//! typed, because nothing reaches back to blur it — but the box stops accepting
+//! text at once, and the next keystroke that would have changed or sent the
+//! draft raises the ceremony instead of doing nothing. One keystroke
+//! deliberately does not: an IME-consumed one, reported as "Process" or "Dead"
+//! rather than a character. A reader who was mid-composition when the session
+//! dropped composes on into a box that takes none of it and hears nothing until
+//! they press on it — `readonly` is what holds the composition out, not a
+//! ceremony. The write demand above stays regardless, and a signed-in reader
+//! meets none of it.
+//!
 //! # What a host provides
 //!
 //! An [`ankurah::Context`], through [`ChatContext`]. This crate creates no

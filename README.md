@@ -12,9 +12,11 @@ that want to put live chat surfaces in their own pages.
   reading through it. The host owns that signal and is the only thing that
   writes it;
 - owns sign-in entirely — components render read-only on an unauthenticated
-  context, and the *send affordance* invokes a **host-provided callback**
-  when auth is needed. Upgrading anonymous → authenticated must not remount
-  or lose state;
+  context, and reaching for the message box invokes a **host-provided
+  callback**: an anonymous reader who *presses on* the composer gets the host's
+  sign-in ceremony rather than a caret, and every anonymous *write* raises the
+  same callback. A signed-in reader meets neither. Upgrading anonymous →
+  authenticated must not remount or lose state;
 - mounts surfaces independently: room selector, room log, composer, and the
   DM thread view are separately embeddable (a host can show a single room,
   or just a DM panel, without the rest).
@@ -76,6 +78,66 @@ install_styles();
 
 view! { <RoomLog room=room_id /> }
 ```
+
+`on_auth_demand` is the whole of what an anonymous reader meets. **Reaching for
+the message box raises it** — a pointer press on the composer, a programmatic
+focus, or text dragged onto it — and the composer drops the focus rather than
+opening a caret, so nobody composes a draft they cannot send. An anonymous
+reader's **Tab skips the box** rather than landing on it, and the box is
+`readonly` while they have no viewer, so no keystroke, paste, drop or IME
+composition reaches the draft. Every **write** raises it too (a send, a
+reaction, creating a room, opening a conversation). A signed-in reader meets
+none of it.
+
+**Once per gesture**, counted rather than timed. A double-click raises it once,
+not twice. A ceremony that hands focus back to the composer when it closes
+raises it **zero** more times, however long it was open — the returning focus is
+not a gesture. The next real press raises it again.
+
+**Make the callback idempotent.** A genuinely new gesture while the ceremony is
+already open raises it again — that is what lets a reader who dismissed it get
+it back — so raising an open ceremony should be a no-op on your side.
+
+Four limits on the claim, stated plainly:
+
+- The **down transition** is not symmetric. A session that drops to anonymous
+  under a focused composer keeps its caret and whatever was already typed;
+  nothing reaches back to blur it. What it loses at once is mutability — the box
+  goes `readonly` — and the next keystroke that would have changed or sent the
+  draft raises the ceremony instead of doing nothing. One keystroke deliberately
+  does not: an **IME-consumed** one, which reports `Process` or `Dead` rather
+  than a character. A reader who was mid-composition when the session dropped
+  composes on into a box that takes none of it and hears nothing, until they
+  press on the box. `readonly` is what holds that composition out of the draft,
+  not a ceremony.
+- Two focus routes stay **silent** rather than raising a second ceremony: a
+  screen reader's browse-mode activation, and your own code focusing the box.
+  The crate re-arms for a reader clicking Reply, because it knows that focus
+  came from a click; it cannot tell either of those two apart from a focus that
+  belongs to a click already under way. So once one of them has raised a
+  ceremony and the reader dismissed it, the reader's next *click* on the box is
+  swallowed as well, and the click after it raises again. A tap escapes that
+  only where its focus arrives *ahead* of its press, which is where the rule can
+  see the new gesture; where the platform fires the press first, refusing that
+  press keeps the focus from happening at all and the tap is swallowed exactly
+  as the click is. No other route costs a dead click: a press, a keystroke, a
+  drop and arming a reply all mark themselves, so whatever the reader does next
+  is answered.
+- Turning **`leptos/delegation`** on puts every bubbling listener behind one
+  window-level listener, so an ancestor of the composer that calls
+  `stopPropagation` can keep the crate's handlers from running. `readonly` is an
+  attribute and survives that, so the box still takes no text — but the count
+  does not survive it. An ancestor that stops `mousedown` leaves the focus
+  listener carrying the rule alone, which raises once per **press** rather than
+  once per gesture: a double-click raises twice, because the click count travels
+  on `detail`, which is on the event that was stopped. Your idempotent callback
+  is what absorbs the second one. If that ancestor stops `mousedown` only some
+  of the time, the first press that does get through switches the fallback off,
+  and stopped presses after it are silent until one gets through again. Stopping
+  `pointerdown` as well leaves nothing able to tell one gesture from the next.
+- Installing **no callback** removes the composer behaviour entirely — the box
+  takes focus and text as it always did, and the send is refused with a warning
+  in the log rather than a ceremony.
 
 **The surfaces take identifiers, not objects.** A room id, a correspondent's
 id — nothing else. The queries behind them, the members list, the read cursors:
@@ -148,6 +210,12 @@ as one value too.** A signal you derive from a context signal and a viewer
 signal, or an in-place `update` that moves the context now and the reader
 after, tears the pair before it ever reaches the components — and the session
 in between is precisely the mismatch that one value exists to rule out.
+
+The composer goes live in place. It reads the viewer from a reactive attribute
+and from its own listeners rather than capturing it at mount, so the same
+textarea that was demanding a sign-in a moment ago gets its tab stop back the
+instant you set the signal and takes a caret on the next click — same element,
+same listeners, nothing rebuilt.
 
 Nothing unmounts, so the draft, the armed reply, the selected room, the open
 conversation and the message being edited all stay exactly as they were;
