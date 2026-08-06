@@ -142,8 +142,12 @@ session.set((new_context, Some(user_id)));
 ```
 
 That is the whole of it, and it is the only write path — the components never
-write that signal. Both halves move in the one `.set()`, so nothing can see the
-new context paired with the previous reader.
+write that signal. Every read inside them takes the pair as one value, so
+nothing in there can see the new context beside the previous reader. **Set it
+as one value too.** A signal you derive from a context signal and a viewer
+signal, or an in-place `update` that moves the context now and the reader
+after, tears the pair before it ever reaches the components — and the session
+in between is precisely the mismatch that one value exists to rule out.
 
 Nothing unmounts, so the draft, the armed reply, the selected room, the open
 conversation and the message being edited all stay exactly as they were;
@@ -152,12 +156,21 @@ managers — is rebuilt inside the handshake. You hold no query and no manager,
 so there is nothing to swap alongside it and no window where half the surfaces
 read through one session and half through another.
 
-The rebuild is driven by an effect, so it happens one tick after your `.set()`,
-and that tick has a stated meaning: a write that had ALREADY BEGUN under the
-departed session may finish through it — as itself, by the author who started
-it, against that session's own rows. That is the old session completing its own
-bookkeeping. Nothing of it runs after the tick; what is ruled out is a manager
-or a flush continuing for as long as some background task happens to hold it.
+Three moments follow your `.set()`, and only the last two wait for a tick.
+Everything session-scoped is keyed to a VERSION of your signal that recomputes
+on the first read after the set, so nothing can be handed out that pairs your
+new context with the departed session's queries — not even within that tick.
+The DISCARD, which disposes what the departed session built, is driven by an
+effect and lands a tick later (sooner, if a surface asks for something first).
+The REBUILD is later still: it happens when the components re-run on that
+version's notification and ask again.
+
+A write that had ALREADY passed its last check when the discard lands finishes
+— as itself, by the author who started it, against that session's own rows and
+through that session's context, however long its commit takes. That is the old
+session completing its own bookkeeping. No new work begins after the discard,
+and nothing keeps a manager or a flush alive for as long as some background
+task happens to hold it.
 
 One thing does not survive: the timeline's loaded window. A `ScrollManager`
 takes its context at construction and ankurah-virtual-scroll 0.9.0 cannot

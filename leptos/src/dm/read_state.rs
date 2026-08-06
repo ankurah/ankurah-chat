@@ -264,13 +264,13 @@ impl DmReadStateManager {
     }
 
     /// End this manager now — see [`crate::read_state::ReadStateManager::dispose`]
-    /// for the order that makes refcount death insufficient, and for the one
-    /// tick this cannot reach into. The stake here is a write: `heal_cursor`
-    /// repairs a cursor row on its own initiative, so a repair queued before a
-    /// swap would otherwise land after it, through the departed session's
-    /// context. A repair already in flight when the host set its signal still
-    /// lands within that tick, repairing the row it set out to repair; every
-    /// later one sees the flag and does nothing.
+    /// for the order that makes refcount death insufficient, and for what a
+    /// raised flag cannot reach back into. The stake here is a write:
+    /// `heal_cursor` repairs a cursor row on its own initiative, so a repair
+    /// queued before a swap would otherwise land after it, through the departed
+    /// session's context. A repair already past its check when the flag goes up
+    /// still lands, repairing the row it set out to repair, through the session
+    /// it read; every later one sees the flag and does nothing.
     pub(crate) fn dispose(&self) {
         let inner = &self.0;
         inner.disposed.store(true, Ordering::Relaxed);

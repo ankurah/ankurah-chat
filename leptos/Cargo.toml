@@ -46,3 +46,17 @@ features = [
     # behavior passed to scrollIntoView is not something CSS can override.
     "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition", "MediaQueryList",
 ]
+
+# The one thing in this crate that runs on the host: `tests/session_version.rs`,
+# which pins the reactive fact the session version is built on (a memo marked
+# dirty by a `.set()` recomputes on the next read). The components cannot be
+# tested here at all — they need a browser and a live node — but the reactive
+# layer under them can be, and it is where a silent regression would land.
+#
+# A RANGE RATHER THAN A PIN, deliberately: the test is only worth anything if it
+# exercises the same reactive_graph the components run on, and this requirement
+# unifies with the one leptos resolves for wasm. An `=` here would instead hold
+# leptos's own reactive layer down from the test harness, which is not this
+# table's business.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+reactive_graph = "0.2"

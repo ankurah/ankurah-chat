@@ -190,18 +190,23 @@ impl ReadStateManager {
     /// are dropped HERE rather than whenever the refcount reaches zero: a task
     /// or callback that wakes afterwards sees the flag and does nothing.
     ///
-    /// WHAT THIS DOES NOT CATCH, and does not try to. The handshake gets here
-    /// through an effect, one tick after the host's set, so a flush already
-    /// awaiting its commit when the set happened can land inside that tick —
-    /// as the write it always was, by the author who started it, against that
-    /// session's own cursor rows. That is the departed session finishing its
-    /// bookkeeping. Everything after the tick sees the flag and stops, so what
-    /// is closed is a manager continuing for as long as some task happens to
-    /// hold it.
+    /// WHAT THIS DOES NOT CATCH, and does not try to. A flush that had already
+    /// passed its last `disposed` check when the flag went up completes: it
+    /// commits the write it always was, by the author who started it, against
+    /// that session's own cursor rows, through the context it was built with —
+    /// and its commit may resolve several ticks after the flag, so this is not
+    /// "dead within a tick". It is the departed session finishing its own
+    /// bookkeeping, and it stops there: the next pass of the loop reads the
+    /// flag and returns. What is closed is NEW work, and a manager continuing
+    /// for as long as some task happens to hold it.
     ///
     /// Called by the handshake from its discard path, outside the borrow on
     /// the cache — dropping guards runs unsubscribe code that must not be
-    /// holding it.
+    /// holding it. Whichever of the three arrives first raises the flag: the
+    /// accessor that reads the moved session, in the same tick as the host's
+    /// set; the swap effect, a tick later, for a surface that has unmounted and
+    /// asks for nothing; or the teardown cleanup, if the owner goes before that
+    /// effect runs.
     pub(crate) fn dispose(&self) {
         let inner = &self.0;
         inner.disposed.store(true, Ordering::Relaxed);
