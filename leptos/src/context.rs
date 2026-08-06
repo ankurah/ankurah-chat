@@ -767,6 +767,14 @@ impl ChatContext {
             // first; (2) it is dropped after the borrow is released.
             let (published, loser) = self.publish_query(generation, query, slot);
             drop(loser);
+            // That drop is a re-entrancy point too — a bare query drop can
+            // run an unsubscribe path that tears the owner down — and the
+            // `!ours` arm below is a successful return a cursor accessor
+            // follows into a raw session read. The rule is one rule: ended is
+            // re-asked before every successful return, this one included.
+            if self.0.ended.get() {
+                return None;
+            }
             let Some((published, ours)) = published else {
                 generation = self.generation_untracked();
                 continue;
