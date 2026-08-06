@@ -194,10 +194,13 @@ work; neither is privileged.
 
 Unmounting the subtree the handshake was provided in ENDS it, terminally:
 teardown disposes everything the session built, and from that moment every
-accessor answers `None`, writes are refused without raising the auth demand,
-and `chat.generation()` answers its final number, frozen. A handle you kept
-past teardown is a handle to an ended handshake, not a way to keep using one —
-mount a new handshake instead.
+query and cursor accessor answers `None`, writes are refused without raising
+the auth demand, and `chat.generation()` answers its final number, frozen.
+The raw session reads (`chat.context()`, `chat.viewer()` and their untracked
+forms) are the one exception — they have no `None` to answer, and they read
+YOUR signal, whose lifetime is yours. A handle you kept past teardown is a
+handle to an ended handshake, not a way to keep using one — mount a new
+handshake instead.
 
 ## Status & trajectory
 
