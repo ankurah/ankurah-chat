@@ -108,8 +108,12 @@ Three limits on the claim, stated plainly:
 - Two focus routes stay **silent** rather than raising a second ceremony: a
   screen reader's browse-mode activation, and your own code focusing the box.
   The crate re-arms for a reader clicking Reply, because it knows that focus
-  came from a click; it cannot know that of those two, so after a dismissed
-  ceremony they wait for the reader to press on the box.
+  came from a click; it cannot tell either of those two apart from a focus that
+  belongs to a click already under way. So once one of them has raised a
+  ceremony and the reader dismissed it, the reader's *first* press on the box is
+  swallowed as well, and their second press raises it again. No other route
+  costs a dead click: a press, a keystroke, a drop and arming a reply all mark
+  themselves, so whatever the reader does next is answered.
 - Installing **no callback** removes the composer behaviour entirely — the box
   takes focus and text as it always did, and the send is refused with a warning
   in the log rather than a ceremony.

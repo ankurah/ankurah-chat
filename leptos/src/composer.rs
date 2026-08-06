@@ -183,8 +183,25 @@ fn completed_shortcode(units: &[u16], caret: usize) -> Option<(usize, String)> {
 /// character itself for a printable key and a word ("ArrowLeft", "Shift") for
 /// the rest, so "exactly one scalar" is the printable test; a Ctrl or Meta
 /// chord over that is a command rather than a character, and only the two that
-/// move text — paste and cut — count. Alt is not excluded, because on macOS it
-/// composes real characters.
+/// move text — paste and cut — count.
+///
+/// TWO ANSWERS HERE ARE KNOWN TO BE WRONG, and both are accepted rather than
+/// chased, because `readonly` already stops every one of them from writing:
+/// what they cost is silence, never a leaked keystroke.
+///
+/// FALSE where true would be kinder. A keydown that an IME is consuming
+/// reports `key()` as "Process", "Dead" or "Unidentified" — several scalars, so
+/// it tests false — and the platform edit chords built on Ctrl (the emacs
+/// bindings Ctrl+K, Ctrl+Y, Ctrl+D) are excluded with every other Ctrl chord.
+/// A reader who reaches for the draft that way gets nothing rather than the
+/// ceremony, until they press on the box.
+///
+/// TRUE where false would be tidier. Alt is not excluded from the printable
+/// branch, because on macOS the Option key composes real characters and those
+/// must demand. The cost is on Windows and Linux, where an Alt+letter menu
+/// accelerator also reports `key()` as the bare letter and so raises the
+/// ceremony. That is the harmless direction of the two, and it is why the
+/// exclusion is Ctrl and Meta only.
 fn would_write_draft(e: &KeyboardEvent) -> bool {
     let key = e.key();
     match key.as_str() {
@@ -400,7 +417,7 @@ pub(crate) fn WiredComposer(
     // ATTRIBUTE, not an event — no ancestor can stop it — which is the second
     // reason the mutability boundary is not made of listeners.
     //
-    // THE LATCH RULE, exactly. Three per-mount counters, and no clock:
+    // THE LATCH RULE, exactly. Three per-mount counters and one flag, no clock:
     //
     //   `gesture_seq`    — how many pointer gestures this box has seen. Each
     //                      pointerdown bumps it.
@@ -409,12 +426,23 @@ pub(crate) fn WiredComposer(
     //   `demanded_in`    — the `gesture_seq` as of the moment the outstanding
     //                      demand was raised, or None while none is
     //                      outstanding. `demand_once` does nothing when it is
-    //                      Some; otherwise it records the current seq and calls
-    //                      the host.
+    //                      Some; otherwise it records the current seq, calls
+    //                      the host, and answers that it raised.
+    //   `demand_outside_press`
+    //                    — whether the outstanding demand was raised by a route
+    //                      that is no part of any press gesture. THIS CANNOT BE
+    //                      INFERRED from the counters, so it is recorded at the
+    //                      three demand sites that know it: the keydown gate,
+    //                      the drop, and the effect that focuses the box when a
+    //                      reply is armed. Cleared by `rearm`, which is the one
+    //                      place the latch clears. The focus listener never
+    //                      touches it — it cannot tell a reply-arming focus
+    //                      from a ceremony handing focus back, and the effect
+    //                      that CAUSES the reply focus marks it instead.
     //
-    // The latch is cleared by exactly one thing: a PRIMARY, `detail() <= 1`
-    // mousedown, and only when the outstanding demand does not already belong
-    // to the press being handled. In order, that press —
+    // The latch is cleared by exactly one thing among the reader's presses: a
+    // PRIMARY, `detail() <= 1` mousedown, and only when the outstanding demand
+    // does not already belong to the press being handled. In order, that press —
     //
     //   1. returns immediately if `detail() > 1`, BEFORE any bookkeeping. The
     //      second and third press of a multi-click continue the gesture the
@@ -427,59 +455,104 @@ pub(crate) fn WiredComposer(
     //      IS a new gesture. This is the delegation-enabled world where a host
     //      ancestor stops pointerdown alone: without the self-bump the counter
     //      would freeze and every later click would be swallowed.
-    //   3. clears the latch UNLESS no completed press has answered the
-    //      outstanding demand yet — `last_press_seq` is None, or it is older
-    //      than the seq the demand was raised in. That is the focus-before-
-    //      press order, in both its shapes: a tap whose focus arrives before
-    //      the compatibility mousedown, and a host ancestor whose own
-    //      pointerdown handler calls `textarea.focus()` mid-propagation —
-    //      including the delegated world, where that focus demands BEFORE our
-    //      pointerdown handler has run at the window, so the demand is recorded
-    //      one seq early. Testing against the last PRESS rather than against
-    //      the current seq is what makes that early recording harmless.
-    //   4. records itself in `last_press_seq`, and demands.
+    //   3. treats the outstanding demand as ALREADY ANSWERED, and so suppresses
+    //      its own, only when BOTH hold: `demand_outside_press` is clear, and
+    //      no completed press stands behind that demand (`last_press_seq` is
+    //      None, or older than the seq the demand was raised in). The second
+    //      half is the focus-before-press order, in both its shapes: a tap
+    //      whose focus arrives before the compatibility mousedown, and a host
+    //      ancestor whose own pointerdown handler calls `textarea.focus()`
+    //      mid-propagation — including the delegated world, where that focus
+    //      demands BEFORE our pointerdown handler has run at the window, so the
+    //      demand is recorded one seq early. Testing against the last PRESS
+    //      rather than against the current seq is what makes that early
+    //      recording harmless. The first half is why a keystroke, a drop or an
+    //      armed reply does not cost the reader a dead click afterwards: those
+    //      leave counters indistinguishable from the ancestor-focus order, and
+    //      only the flag separates them.
+    //   4. records itself in `last_press_seq`, re-arms if it was not answered,
+    //      and demands.
     //
-    // TRACED, all of it. SINGLE CLICK: pointerdown bumps to 1; the press has no
-    // demand outstanding, so it clears nothing and demands at 1. DOUBLE AND
-    // TRIPLE CLICK: presses two and three return at step 1, so still one
-    // ceremony — and the next single click demands again, because by then a
-    // completed press stands behind the outstanding demand. TAP OR PEN whose
-    // focus precedes the compatibility mousedown: focus demands at 1, the press
-    // finds `last_press_seq` None and suppresses — one ceremony. ANCESTOR
-    // FOCUSES DURING POINTERDOWN, listeners direct: same as the tap. The same,
-    // DELEGATED: the focus demands at seq 0 because our pointerdown handler has
-    // not run yet; the press still finds no completed press behind that demand
-    // and suppresses — one ceremony. ANCESTOR STOPS POINTERDOWN ONLY: the press
-    // self-bumps, and every click demands. CEREMONY REFOCUS, after any length
-    // of time: a focus with no press at all, so `demand_once` finds the latch
-    // up and raises ZERO — which is why the rule counts gestures instead of
-    // measuring time, and why no coarse or frozen clock can affect it. A FOCUS
-    // WITH NO PRESS EVER BEHIND IT (a host focusing the box from its own code)
-    // demands once and then latches; a second one is silent until the reader
-    // presses, and the host callback's documented idempotence is what makes the
-    // first one safe to repeat when a press does arrive.
+    // TRACED, all of it.
+    //
+    //   SINGLE CLICK — pointerdown bumps to 1; the press has no demand
+    //     outstanding, so it re-arms harmlessly and demands at 1.
+    //   DOUBLE AND TRIPLE CLICK — presses two and three return at step 1, so
+    //     still one ceremony; the next single click demands again, because by
+    //     then a completed press stands behind the outstanding demand.
+    //   TAP OR PEN whose focus precedes the compatibility mousedown — focus
+    //     demands at 1 leaving the flag clear, the press finds `last_press_seq`
+    //     None and suppresses. One ceremony.
+    //   ANCESTOR FOCUSES DURING POINTERDOWN, listeners direct — as the tap.
+    //   THE SAME, DELEGATED — the focus demands at seq 0 because our
+    //     pointerdown handler has not run yet, and again leaves the flag clear
+    //     because that focus IS inside the press gesture; the press finds no
+    //     completed press behind the demand and suppresses. One ceremony.
+    //   ANCESTOR STOPS POINTERDOWN ONLY — the press self-bumps, and every click
+    //     demands.
+    //   CEREMONY REFOCUS, after any length of time — a focus with no press at
+    //     all: `demand_once` finds the latch up, raises ZERO and marks nothing.
+    //     This is why the rule counts gestures instead of measuring time, and
+    //     why no coarse or frozen clock can affect it.
+    //   KEYDOWN THEN PRESS — the down-transition reader types (ceremony, marked
+    //     outside-press), dismisses, and clicks the box: step 3 sees the flag
+    //     and does not suppress, so the click gets a CEREMONY rather than being
+    //     a dead click.
+    //   DROP THEN PRESS — same, marked by the drop.
+    //   REPLY THEN PRESS — same, marked by the reply-arming effect before it
+    //     focuses.
+    //   A FOCUS WITH NO PRESS EVER BEHIND IT that the crate did not cause — a
+    //     host focusing the box from its own code, a screen reader's
+    //     browse-mode activation — demands once and then latches with the flag
+    //     clear, because nothing can tell it apart from the ancestor-focus
+    //     order above. A second such focus is silent, and so is the reader's
+    //     FIRST press afterwards; the second press demands. That residue is
+    //     documented at the focus listener and in the README, and it is the
+    //     only route left with a dead click in it.
     //
     // Per-mount state, so a host that keys its subtree on `chat.generation()`
     // gets a fresh latch along with the fresh composer.
     let gesture_seq = StoredValue::new(0u64);
     let last_press_seq = StoredValue::new(None::<u64>);
     let demanded_in = StoredValue::new(None::<u64>);
+    let demand_outside_press = StoredValue::new(false);
     let demand_once = {
         let chat = chat.clone();
-        move || {
+        // Answers whether it RAISED, so a route that knows it is not part of a
+        // press gesture can mark what it just raised — and mark nothing when
+        // the latch turned it away.
+        move || -> bool {
             if demanded_in.get_value().is_some() {
-                return;
+                return false;
             }
             demanded_in.set_value(Some(gesture_seq.get_value()));
             chat.demand_auth();
+            true
         }
     };
-    // The crate's own deliberate gestures re-arm the latch before they demand:
-    // a drop, and the reply-arming focus further down. Each is a reader acting
-    // on purpose, and neither can be the second route of some other gesture —
-    // unlike the focus a closing ceremony hands back, which clears nothing and
-    // therefore stays quiet.
-    let rearm = move || demanded_in.set_value(None);
+    // Clears the latch AND the outside-press mark: after this, whatever demand
+    // comes next is described by whoever raises it and nothing carries over
+    // from the one that just went away.
+    let rearm = move || {
+        demanded_in.set_value(None);
+        demand_outside_press.set_value(false);
+    };
+    // The crate's own deliberate gestures that are NOT a press: a drop, and the
+    // reply-arming focus further down. Each is a reader acting on purpose, so
+    // each re-arms rather than reading as the second route of some other
+    // gesture — unlike the focus a closing ceremony hands back, which clears
+    // nothing and therefore stays quiet. Each also MARKS what it raised, so
+    // that the reader's next press on the box demands rather than being
+    // swallowed as that demand's second route.
+    let demand_outside_a_press = {
+        let demand_once = demand_once.clone();
+        move || {
+            rearm();
+            if demand_once() {
+                demand_outside_press.set_value(true);
+            }
+        }
+    };
     let anonymous_readonly = demand_instead_of_caret.clone();
     let anonymous_tabindex = {
         let demand_instead_of_caret = demand_instead_of_caret.clone();
@@ -522,6 +595,11 @@ pub(crate) fn WiredComposer(
             // (3) Has a completed press already answered the demand in hand?
             let answered_by_this_press = match demanded_in.get_value() {
                 None => false,
+                // Raised by a route that is no part of any press gesture — a
+                // keystroke, a drop, arming a reply. This press is the first to
+                // reach it and must demand; the counters alone cannot tell it
+                // apart from the ancestor-focus order below.
+                Some(_) if demand_outside_press.get_value() => false,
                 Some(raised_in) => last_press_seq.get_value().is_none_or(|pressed| pressed < raised_in),
             };
             // (4)
@@ -542,14 +620,21 @@ pub(crate) fn WiredComposer(
             if let Some(el) = textarea_ref.get_untracked() {
                 let _ = el.blur();
             }
-            // WHAT STAYS SWALLOWED HERE, deliberately: a focus that raises
-            // nothing because a demand is already outstanding and nothing
-            // re-armed the latch for it. The crate re-arms for its OWN
-            // reply-arming focus, because it knows that one came from a
-            // reader's click on Reply. It cannot know that of a screen reader's
-            // browse-mode activation, or of a host focusing the box from its
-            // own code, so a second one of those after a dismissed ceremony is
-            // silent until the reader presses on the box.
+            // THIS LISTENER NEVER TOUCHES `demand_outside_press`, and that is
+            // the whole of why the tap and ancestor-focus orders still
+            // suppress: a focus arriving inside a press gesture leaves the flag
+            // clear, so the mousedown behind it reads as that demand's second
+            // route. The crate marks the one focus it can attribute — the
+            // reply-arming one — at the effect that causes it, upstream of
+            // here, because from inside this handler a reply-arming focus and a
+            // ceremony handing focus back are the same event.
+            //
+            // WHAT STAYS SWALLOWED, deliberately: a focus the crate did not
+            // cause and cannot attribute — a screen reader's browse-mode
+            // activation, a host focusing the box from its own code. It demands
+            // the first time and latches; a second one is silent, and so is the
+            // reader's first press afterwards, because it is indistinguishable
+            // from the ancestor-focus order. Their second press demands.
             demand_once();
         }
     };
@@ -563,7 +648,7 @@ pub(crate) fn WiredComposer(
     };
     let refuse_drop = {
         let demand_instead_of_caret = demand_instead_of_caret.clone();
-        let demand_once = demand_once.clone();
+        let demand_outside_a_press = demand_outside_a_press.clone();
         move |e: leptos::ev::DragEvent| {
             if !demand_instead_of_caret() {
                 return;
@@ -571,10 +656,10 @@ pub(crate) fn WiredComposer(
             e.prevent_default();
             // A drop is its own gesture — the press that began it landed on the
             // drag source, never here — so it can never be the second route of
-            // a gesture this latch is already holding. Re-arm, or a second drop
-            // after a dismissed ceremony would be swallowed.
-            rearm();
-            demand_once();
+            // a gesture this latch is already holding. Re-arm and mark, or a
+            // second drop after a dismissed ceremony would be swallowed, and so
+            // would the reader's first click on the box afterwards.
+            demand_outside_a_press();
         }
     };
 
@@ -806,15 +891,20 @@ pub(crate) fn WiredComposer(
     // and the user's next act is typing.
     //
     // For an anonymous reader that focus is refused and turned into the
-    // ceremony, so the latch is RE-ARMED first: the crate knows this focus came
-    // from a reader clicking Reply, which is a fresh deliberate gesture, and
-    // without the re-arm a second Reply after a dismissed ceremony would be
-    // swallowed by the demand the first one left outstanding. Re-arming
-    // unconditionally is right — for a signed-in reader nothing reads the latch
-    // at all, and the message row offers Reply to every reader.
+    // ceremony, so the latch is RE-ARMED AND MARKED before the focus goes out:
+    // the crate knows this focus came from a reader clicking Reply, which is a
+    // fresh deliberate gesture and no part of a press on the box. Without the
+    // re-arm a second Reply after a dismissed ceremony would be swallowed by
+    // the demand the first one left outstanding; without the mark, so would the
+    // reader's first click on the box afterwards. The mark is set HERE rather
+    // than in the focus listener, which cannot tell a reply-arming focus from a
+    // ceremony handing focus back. Doing both unconditionally is right — for a
+    // signed-in reader nothing reads either, and the message row offers Reply
+    // to every reader.
     Effect::new(move |_| {
         if replying_to.get().is_some() {
             rearm();
+            demand_outside_press.set_value(true);
             if let Some(el) = textarea_ref.get_untracked() {
                 let _ = el.focus();
             }
@@ -1036,7 +1126,15 @@ pub(crate) fn WiredComposer(
             // sent the draft — a caret move is not a reach for the box — and
             // latched like every other route, so holding a key down asks once.
             if demand_instead_of_caret() && would_write_draft(&e) {
-                demand_once();
+                // Latched, not re-armed: holding a key down, or typing on into
+                // a box that has stopped accepting text, asks once. But a
+                // keystroke is no part of a press gesture, so what it DOES
+                // raise is marked — otherwise the reader's first click on the
+                // box afterwards would read as that demand's second route and
+                // be swallowed.
+                if demand_once() {
+                    demand_outside_press.set_value(true);
+                }
                 return;
             }
             // While the mention popup is open it captures its keys —
