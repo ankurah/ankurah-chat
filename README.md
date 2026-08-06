@@ -13,10 +13,10 @@ that want to put live chat surfaces in their own pages.
   writes it;
 - owns sign-in entirely — components render read-only on an unauthenticated
   context, and reaching for the message box invokes a **host-provided
-  callback**: an anonymous reader who *focuses* the composer gets the host's
-  sign-in ceremony rather than a caret, and an anonymous *send* raises the same
-  callback for every route to it that skipped the box. A signed-in reader meets
-  neither. Upgrading anonymous → authenticated must not remount or lose state;
+  callback**: an anonymous reader who *presses on* the composer gets the host's
+  sign-in ceremony rather than a caret, and every anonymous *write* raises the
+  same callback. A signed-in reader meets neither. Upgrading anonymous →
+  authenticated must not remount or lose state;
 - mounts surfaces independently: room selector, room log, composer, and the
   DM thread view are separately embeddable (a host can show a single room,
   or just a DM panel, without the rest).
@@ -79,14 +79,24 @@ install_styles();
 view! { <RoomLog room=room_id /> }
 ```
 
-`on_auth_demand` is the whole of what an anonymous reader meets. **Focusing the
-composer raises it** — once per gesture, with the focus handed straight back,
-so nobody types a draft they cannot send — and so does a **send** that reached
-the button without the box ever having been focused, along with every other
-write (a reaction, creating a room, opening a conversation). A signed-in reader
-meets none of it. Install no callback and the focus behaviour does not exist
-either: the composer takes focus as it always did, and the send is refused with
-a warning in the log rather than a ceremony.
+`on_auth_demand` is the whole of what an anonymous reader meets. **Reaching for
+the message box raises it** — a pointer press on the composer, a programmatic
+focus, or text dragged onto it — and the composer drops the focus rather than
+opening a caret, so nobody composes a draft they cannot send. Once per gesture:
+a double-click raises it once, and so does a ceremony that hands focus back when
+it closes. An anonymous reader's **Tab skips the box** rather than landing on
+it. Every **write** raises it too (a send, a reaction, creating a room, opening
+a conversation). A signed-in reader meets none of it.
+
+**Make the callback idempotent.** A genuinely new gesture while the ceremony is
+already open raises it again — that is what lets a reader who dismissed it get
+it back — so raising an open ceremony should be a no-op on your side.
+
+Two limits on the claim, stated plainly. This is the *anonymous-then-signs-in*
+direction: a session that **drops** to anonymous keeps whatever caret and draft
+it already had until the next gesture. And installing **no callback** removes
+the composer behaviour entirely — the box takes focus as it always did, and the
+send is refused with a warning in the log rather than a ceremony.
 
 **The surfaces take identifiers, not objects.** A room id, a correspondent's
 id — nothing else. The queries behind them, the members list, the read cursors:
@@ -160,9 +170,11 @@ signal, or an in-place `update` that moves the context now and the reader
 after, tears the pair before it ever reaches the components — and the session
 in between is precisely the mismatch that one value exists to rule out.
 
-The composer goes live in place: it reads the viewer on each gesture rather
-than at mount, so the same textarea that was demanding a sign-in a moment ago
-takes a caret on the next click — same element, same listeners, nothing rebuilt.
+The composer goes live in place. It reads the viewer from a reactive attribute
+and from its own listeners rather than capturing it at mount, so the same
+textarea that was demanding a sign-in a moment ago gets its tab stop back the
+instant you set the signal and takes a caret on the next click — same element,
+same listeners, nothing rebuilt.
 
 Nothing unmounts, so the draft, the armed reply, the selected room, the open
 conversation and the message being edited all stay exactly as they were;

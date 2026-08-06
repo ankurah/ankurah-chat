@@ -205,13 +205,18 @@ fn mention_candidates(users: &[UserView], query: &str) -> Vec<UserView> {
 /// "Replying to …" chip sits above the input and the send attaches the
 /// referenced message as `re`.
 ///
-/// AN ANONYMOUS READER NEVER GETS A CARET HERE. Focusing the box raises the
-/// host's auth-demand callback — once per gesture — and the focus is taken
-/// straight back, so there is never a guest-typed draft to strand. A send
-/// demands too, for every route to Send that skipped the box. A signed-in
-/// reader meets neither, and a host that installed no callback keeps the older
-/// behaviour: the box takes focus, and the send is refused with a warning in
-/// the log.
+/// A READER WITH NO VIEWER GETS NO CARET AND WRITES NO DRAFT. A pointer press
+/// on the box, a programmatic focus, or text dragged onto it raises the host's
+/// auth-demand callback — once per gesture — and the focus is dropped rather
+/// than kept; Tab skips the box entirely; and beforeinput is refused, so no
+/// drop or paste reaches the draft. Every write demands as well, through
+/// `write_session`. A signed-in reader meets none of it, and a host that
+/// installed no callback keeps the older behaviour exactly: the box takes
+/// focus, and the send is refused with a warning in the log.
+///
+/// ONE DIRECTION. A session that DROPS to anonymous while the box is focused
+/// keeps its caret and its draft until the next gesture — nothing here revokes
+/// a focus that already landed, and the send refuses either way.
 ///
 /// The draft holds plain `@DisplayName` text, never raw tokens: the
 /// autocomplete inserts the name, send re-encodes matching `@Name` runs to the
@@ -262,101 +267,203 @@ pub(crate) fn WiredComposer(
     // WHETHER REACHING FOR THIS BOX RAISES THE HOST'S SIGN-IN CEREMONY INSTEAD
     // OF OPENING A CARET.
     //
-    // A reader with no viewer never gets a caret here: the demand goes up the
-    // moment they reach for the box, so there is never a guest-typed draft to
-    // strand, and they learn what is needed before composing rather than after.
+    // A reader with no viewer is given the ceremony the moment they reach for
+    // the box, and no text of theirs ever reaches the draft — not by caret, not
+    // by drag-and-drop, not by paste. They learn what is needed before
+    // composing rather than after.
     //
     // Both halves of the test are load-bearing. The viewer is read through the
-    // TRACKED accessor, so a reader who signs in mid-visit — the host sets its
-    // session signal and nothing remounts — has a live message box on the very
-    // next gesture, with the same DOM node, the same node_ref and the same
+    // TRACKED accessor, and it is read from an ATTRIBUTE closure below as well
+    // as from the listeners, so a reader who signs in mid-visit — the host sets
+    // its session signal and nothing remounts — gets the tab stop back and a
+    // live message box with the same DOM node, the same node_ref and the same
     // listeners. And a host that installed no auth-demand callback keeps
     // exactly the behaviour it had before this existed: taking the caret away
     // with no ceremony to put in its place is a dead end, so the whole gate
     // stands down and the send path refuses as it always did.
+    //
+    // ONE DIRECTION ONLY. This is the guest-opens-then-signs-in direction. A
+    // session that DROPS to anonymous while the box is focused keeps its caret
+    // and its draft until the next gesture: nothing here revokes a focus that
+    // has already landed, and the send refuses through `write_session` as it
+    // always has.
     let demand_instead_of_caret = {
         let chat = chat.clone();
         move || !chat.is_authenticated() && chat.can_demand_auth()
     };
 
-    // ONE DEMAND PER GESTURE.
+    // ONE DEMAND PER GESTURE, AND NO TEXT BY ANY ROUTE.
     //
-    // Three listeners, because one gesture can reach a textarea by more than
-    // one route and the demand must go up exactly once whichever route it took:
+    // One attribute and five listeners, because a textarea can take focus and
+    // take text by more than one route, and the demand must go up exactly once
+    // per gesture whichever route the reader used:
     //
-    //   pointerdown — the first event of any tap or click, ahead of mousedown
-    //                 and ahead of focus in every engine. It says a NEW GESTURE
-    //                 HAS BEGUN, which lowers the latch, and then demands.
-    //   mousedown   — prevent_default, so the caret never lands at all. The
-    //                 same trick the autocomplete popups below use to KEEP
-    //                 focus, pointed the other way.
-    //   focus       — the belt: Tab, a programmatic focus (arming a reply calls
-    //                 `el.focus()`), and any engine where the prevent_default
-    //                 above did not stop focus. It blurs FIRST and demands
-    //                 after, so the host's popup opens with nothing focused and
-    //                 has no message box to hand focus back to on close.
+    //   tabindex     — `-1` while anonymous, so sequential focus navigation
+    //                  SKIPS the box entirely. Tab flows past it to the next
+    //                  control instead of landing on something that would
+    //                  immediately blur — which in Chrome and Firefox drops to
+    //                  the document body and restarts forward Tab at the top.
+    //                  Absent (not `0`) for a signed-in reader, so their markup
+    //                  is untouched.
+    //   pointerdown  — STAMPS when this pointer gesture began, and nothing
+    //                  else. It is the first event of any tap or click, so its
+    //                  timeStamp is the earliest of the gesture.
+    //   mousedown    — prevent_default for EVERY button, so the caret never
+    //                  lands (the same trick the autocomplete popups below use
+    //                  to KEEP focus, pointed the other way), then demands for
+    //                  the primary button only. A right-press gets no ceremony
+    //                  alongside its context menu.
+    //   focus        — the belt: a programmatic focus (arming a reply calls
+    //                  `el.focus()`) and any engine where the prevent_default
+    //                  above did not stop focus. It blurs FIRST and demands
+    //                  after, so the host's popup opens with nothing focused
+    //                  and there is no message box to restore focus to when it
+    //                  closes.
+    //   beforeinput  — prevent_default: the one place every insertion route
+    //                  passes through. A DROP does not need focus and does not
+    //                  need a press on this element — the pointerdown belonged
+    //                  to the drag source — so none of the gates above see it,
+    //                  and an uncancelled drop on a mutable textarea inserts by
+    //                  default. This also covers paste and an IME commit, for
+    //                  the engines where focus slipped through.
+    //   drop         — prevent_default as well, for engines whose drop
+    //                  insertion does not raise a cancelable beforeinput, and
+    //                  it demands: a reader who drags text at the box has
+    //                  reached for it as plainly as one who clicks, and
+    //                  swallowing that would be the dead end this listener
+    //                  exists to avoid. beforeinput does NOT demand — it can
+    //                  arrive in bursts during composition, and every route to
+    //                  it has already been answered somewhere above.
     //
-    // THE LATCH RULE, exactly: `demanded` goes UP the instant a demand is
-    // raised, and comes DOWN only on a pointerdown on this textarea. So the
-    // second route of one gesture finds it up and stays quiet, and the refocus
-    // a closing popup hands back — a focus with no pointerdown before it —
-    // finds it up too, however long the ceremony took. That is why the rule is
-    // keyed to the gesture and not to elapsed time: a ceremony can sit open for
-    // a minute, and every timeout short enough to let the next real click
-    // through is far too short to still be running when it closes. A genuinely
-    // new click begins with a pointerdown, which lowers the latch, and demands
-    // again.
+    // WHY THE LISTENERS FIRE AT ALL, in both worlds. tachys delegates a
+    // listener only when the event bubbles AND `cfg!(feature = "delegation")`
+    // (tachys/src/html/event.rs:214). That feature is not on by default and is
+    // not enabled anywhere in this workspace — tachys resolves here as
+    // `default,oco,reactive_graph,reactive_stores,testing` — so every listener
+    // below attaches DIRECTLY to the textarea. A host that turns
+    // `leptos/delegation` on instead routes the bubbling ones (pointerdown,
+    // mousedown, beforeinput, drop) through one window-level bubble-phase
+    // listener that walks up from the target and invokes each node's handler
+    // with the SAME native event (tachys/src/renderer/dom.rs:367).
+    // prevent_default holds in both worlds, because a default action runs after
+    // the whole dispatch, not after the target phase. The one thing that
+    // differs: in the delegated world an ancestor of the composer that calls
+    // stopPropagation on pointerdown or mousedown keeps the event from ever
+    // reaching the window, and those handlers do not run. `focus` is
+    // non-bubbling in tachys' table, so it attaches directly either way and is
+    // the belt that survives that case.
     //
-    // WHAT THE RULE DELIBERATELY SWALLOWS: a Tab INTO the box that follows an
-    // earlier demand, since no pointerdown precedes it — the reader is blurred
-    // in silence. Closing that would take a document-level key listener per
-    // composer, to see a Tab pressed on whatever element had focus; a reader
-    // who tabs in and gets nothing can click, and the send path demands
-    // regardless.
+    // THE LATCH RULE, exactly. `demanded_at` holds the timeStamp of the event
+    // that raised the outstanding demand, or None while none is outstanding.
+    // `gesture_at` holds the timeStamp of the pointerdown that began the
+    // current pointer gesture. A demand is raised only when `demanded_at` is
+    // None, and `demanded_at` is cleared by exactly one thing: a primary-button
+    // mousedown that BEGINS A NEW GESTURE. A press begins a new gesture unless
+    // either of these says otherwise —
+    //
+    //   * `detail() > 1` — the second or later press of one click sequence. A
+    //     double-click is one interaction and gets one ceremony. The click
+    //     count is read from the MOUSEDOWN, which is the event the UI Events
+    //     spec defines it on; a pointerdown's `detail` is 0, so the same test
+    //     there would be dead code.
+    //   * `demanded_at >= gesture_at` — the outstanding demand was raised by an
+    //     event THIS press produced. That is the focus-before-press order: a
+    //     tap whose focus arrives before the compatibility mousedown, or a host
+    //     ancestor whose own pointerdown handler calls `textarea.focus()`
+    //     mid-propagation. Comparing the two stamps by VALUE rather than by the
+    //     order the handlers ran is what makes this hold whether pointerdown
+    //     reached us in the target phase or later at the window.
+    //
+    // So the second route of one gesture finds the latch up and stays quiet.
+    // The refocus a closing ceremony hands back is a focus with no press at
+    // all: it never consults `gesture_at`, finds the latch up, and stays quiet
+    // however long the ceremony was open. That is why the rule is keyed to the
+    // gesture and not to elapsed time — a ceremony can sit open for a minute,
+    // and every timeout short enough to let the next real click through is far
+    // too short to still be running when it closes. A genuinely new click
+    // arrives with `detail() == 1` and a `gesture_at` later than the demand it
+    // is following, so it clears the latch and demands again.
     //
     // Per-mount state, so a host that keys its subtree on `chat.generation()`
     // gets a fresh latch along with the fresh composer.
-    let demanded = StoredValue::new(false);
+    let demanded_at = StoredValue::new(None::<f64>);
+    let gesture_at = StoredValue::new(None::<f64>);
     let demand_once = {
         let chat = chat.clone();
-        move || {
-            if demanded.get_value() {
+        move |at: f64| {
+            if demanded_at.get_value().is_some() {
                 return;
             }
-            demanded.set_value(true);
+            demanded_at.set_value(Some(at));
             chat.demand_auth();
         }
     };
-    let demand_on_press = {
+    let anonymous_tabindex = {
         let demand_instead_of_caret = demand_instead_of_caret.clone();
-        let demand_once = demand_once.clone();
-        move |_| {
-            if !demand_instead_of_caret() {
-                return;
+        move || demand_instead_of_caret().then_some("-1")
+    };
+    let mark_gesture = {
+        let demand_instead_of_caret = demand_instead_of_caret.clone();
+        move |e: leptos::ev::PointerEvent| {
+            if demand_instead_of_caret() {
+                gesture_at.set_value(Some(e.time_stamp()));
             }
-            demanded.set_value(false);
-            demand_once();
         }
     };
     let refuse_caret = {
         let demand_instead_of_caret = demand_instead_of_caret.clone();
+        let demand_once = demand_once.clone();
         move |e: leptos::ev::MouseEvent| {
-            if demand_instead_of_caret() {
-                e.prevent_default();
+            if !demand_instead_of_caret() {
+                return;
             }
+            // Every button: a right-press must not land a caret either.
+            e.prevent_default();
+            if e.button() != 0 {
+                return;
+            }
+            let raised_by_this_gesture = match (demanded_at.get_value(), gesture_at.get_value()) {
+                (Some(raised), Some(started)) => raised >= started,
+                // No press has been stamped (an engine with no pointer events):
+                // treat it as new and demand, rather than swallow.
+                _ => false,
+            };
+            if e.detail() <= 1 && !raised_by_this_gesture {
+                demanded_at.set_value(None);
+            }
+            demand_once(e.time_stamp());
         }
     };
     let demand_on_focus = {
         let demand_instead_of_caret = demand_instead_of_caret.clone();
         let demand_once = demand_once.clone();
-        move |_| {
+        move |e: leptos::ev::FocusEvent| {
             if !demand_instead_of_caret() {
                 return;
             }
             if let Some(el) = textarea_ref.get_untracked() {
                 let _ = el.blur();
             }
-            demand_once();
+            demand_once(e.time_stamp());
+        }
+    };
+    let refuse_insertion = {
+        let demand_instead_of_caret = demand_instead_of_caret.clone();
+        move |e: leptos::ev::InputEvent| {
+            if demand_instead_of_caret() {
+                e.prevent_default();
+            }
+        }
+    };
+    let refuse_drop = {
+        let demand_instead_of_caret = demand_instead_of_caret.clone();
+        let demand_once = demand_once.clone();
+        move |e: leptos::ev::DragEvent| {
+            if !demand_instead_of_caret() {
+                return;
+            }
+            e.prevent_default();
+            demand_once(e.time_stamp());
         }
     };
 
@@ -1083,12 +1190,17 @@ pub(crate) fn WiredComposer(
                         emoji_draft.set(None);
                     }
                     // An anonymous reader gets the host's sign-in ceremony
-                    // rather than a caret. All three are no-ops for a signed-in
-                    // reader, and for a host that installed no callback; see
-                    // the latch rule above them.
-                    on:pointerdown=demand_on_press
+                    // rather than a caret, and no text of theirs reaches the
+                    // draft by any route. Every one of these is inert for a
+                    // signed-in reader and for a host that installed no
+                    // callback — the tabindex is absent rather than "0", so
+                    // their markup is untouched. See the latch rule above.
+                    tabindex=anonymous_tabindex
+                    on:pointerdown=mark_gesture
                     on:mousedown=refuse_caret
                     on:focus=demand_on_focus
+                    on:beforeinput=refuse_insertion
+                    on:drop=refuse_drop
                     prop:disabled=move || !is_connected()
                 ></textarea>
                 <Show when=move || editing_message.get().is_some()>
@@ -1117,9 +1229,9 @@ pub(crate) fn WiredComposer(
 /// "message me" is one composer and nothing else.
 ///
 /// A reader with no viewer gets the host's sign-in ceremony the moment they
-/// reach for the box rather than a caret, so a standalone composer on a public
+/// press on the box rather than a caret, so a standalone composer on a public
 /// page is an invitation to sign in and never a draft that cannot be sent. The
-/// send demands as well. Both want
+/// write path demands as well. Both want
 /// [`crate::ChatContextBuilder::on_auth_demand`]; with no callback installed
 /// the box takes focus as it always did and the send is refused with a warning
 /// in the log.

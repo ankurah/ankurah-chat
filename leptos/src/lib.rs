@@ -30,11 +30,15 @@
 //! the handshake itself must be taken where a reactive owner exists; see the
 //! [`context`] module.
 //!
-//! The composer asks EARLIER as well: an anonymous reader who focuses the
-//! message box raises the same callback there, once per gesture, and the
-//! composer takes the focus straight back instead of opening a caret — so a
-//! reader learns what is needed before composing rather than after. The send
-//! demand above stays regardless, and a signed-in reader meets neither.
+//! The composer asks EARLIER as well. A reader with no viewer who presses on
+//! the message box raises the same callback there, once per gesture, and the
+//! composer drops the focus rather than opening a caret; their Tab skips the
+//! box entirely rather than landing on it; and no text of theirs reaches the
+//! draft by drop or by paste either. So a reader learns what is needed before
+//! composing rather than after. That is the anonymous-then-signs-in direction
+//! only: a session that DROPS to anonymous keeps whatever caret and draft it
+//! already had until the next gesture. The write demand above stays regardless,
+//! and a signed-in reader meets none of it.
 //!
 //! # What a host provides
 //!
