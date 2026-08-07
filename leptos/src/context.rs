@@ -585,8 +585,13 @@ impl ChatContext {
 
     pub(crate) fn hooks(&self) -> &ChatHooks { &self.0.hooks }
 
-    /// Every member, live — for author names, mention rendering and the
-    /// composer's autocomplete.
+    /// Every member, live — for mention rendering, the composer's
+    /// autocomplete, and the DM surfaces' names. A MEMBER surface: listing
+    /// the user collection is typically a signed-in privilege, so a guest's
+    /// copy opens and stays empty. That is why the room timeline's author
+    /// labels deliberately do not read it — they follow each message's own
+    /// `user` ref instead (see the message list), which is the read a guest
+    /// session is allowed.
     ///
     /// Built here rather than by a host and rather than per component: every
     /// surface wants the same rows, the timelines remount whenever the reader

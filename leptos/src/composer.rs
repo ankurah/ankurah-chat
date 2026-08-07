@@ -824,8 +824,8 @@ pub(crate) fn WiredComposer(
     };
 
     // Mention autocomplete draws on the handshake's members query — the same
-    // rows the timeline names authors from, so a rename shows up in both at
-    // once, and one subscription rather than one per composer.
+    // rows the timelines render mention chips from, so a rename shows up in
+    // both at once, and one subscription rather than one per composer.
     let members_now = {
         let chat = chat.clone();
         move || {
