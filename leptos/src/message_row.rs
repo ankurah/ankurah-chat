@@ -3,8 +3,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use ankurah::{EntityId, View as _};
-use ankurah_chat_model::MessageView;
-use ankurah_signals::Get as AnkurahGet;
+use ankurah_chat_model::{MessageView, UserView};
 
 use std::collections::HashMap;
 
@@ -33,6 +32,13 @@ pub(crate) fn MessageRow(
     /// changes which rows are theirs, and that changes each row's SHAPE (the
     /// avatar gutter, the meta line), not just its classes.
     current_user_id: Option<String>,
+    /// The author's `User` row, resolved BY REF once in the list and shared —
+    /// passed down like `current_user_id`, so every row in one render agrees,
+    /// and so no row asks the roster (which a signed-out reader's session
+    /// holds empty). `None` covers both "still resolving" and "this session
+    /// may not read the row"; either way the row shows the "Unknown"
+    /// fallback.
+    author: Signal<Option<UserView>>,
     editing_message: RwSignal<Option<MessageView>>,
     /// The composer's reply state, armed by this row's context menu.
     replying_to: RwSignal<Option<MessageView>>,
@@ -52,23 +58,14 @@ pub(crate) fn MessageRow(
     let chat = chat();
 
     // Clone values that will be used in multiple closures
-    let message_for_author = message.clone();
     let message_for_editing = message.clone();
     let message_for_own = message.clone();
     let current_user_id_for_own = current_user_id.clone();
 
-    // Stable author id (a Ref on the message; not reactive).
+    // Stable author id (a Ref on the message; not reactive). The avatar hue
+    // keys on THIS rather than on the resolved row, so a row holds one colour
+    // from first paint — including for authors that never resolve.
     let author_user_id = message.user().map(|r| r.id().to_base64()).unwrap_or_default();
-
-    // Find the author from the users list (reactive: display names can change).
-    let author = {
-        let chat = chat.clone();
-        move || {
-        let user_list = chat.members().map(|q| q.get()).unwrap_or_default();
-        let message_user = message_for_author.user().map(|r| r.id().to_base64()).unwrap_or_default();
-        user_list.iter().find(|u| u.id().to_base64() == message_user).cloned()
-        }
-    };
 
     let is_own_message = current_user_id_for_own
         .as_ref()
@@ -134,11 +131,12 @@ pub(crate) fn MessageRow(
     // that opens a popover can anchor it where the reader clicked.
     let has_member_preview = chat.hooks().member_preview.is_some();
     let open_profile = {
-        let author = author.clone();
         let chat = chat.clone();
         move |e: MouseEvent| {
             e.stop_propagation();
-            let Some(user) = author() else { return };
+            // An unresolved author is a door to nowhere: no row to show,
+            // so the click does nothing — as it always has.
+            let Some(user) = author.get_untracked() else { return };
             let (px, py) = e
                 .current_target()
                 .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
@@ -152,8 +150,10 @@ pub(crate) fn MessageRow(
             }
         }
     };
-    let open_profile_from_avatar = open_profile.clone();
-    let open_profile_from_name = open_profile;
+    // A Some callback is what turns the avatar and the name into buttons: a
+    // button only where it leads somewhere.
+    let open_profile_from_avatar = has_member_preview.then(|| Callback::new(open_profile.clone()));
+    let open_profile_from_name = has_member_preview.then(|| Callback::new(open_profile));
 
     let is_editing =
         move || editing_message.get().as_ref().map(|em| em.id().to_base64() == message_for_editing.id().to_base64()).unwrap_or(false);
@@ -196,8 +196,6 @@ pub(crate) fn MessageRow(
     };
 
     let avatar_hue = fmt::hue_class(&author_user_id);
-    let author_for_avatar = author.clone();
-    let author_for_name = author.clone();
     let message_for_tomb = message.clone();
 
     // Reply context: the referenced original's id, if any. `re` is set
@@ -219,43 +217,12 @@ pub(crate) fn MessageRow(
                         <div class="messageGutter">
                             {first_in_group
                                 .then(|| {
-                                    let author_for_label = author_for_avatar.clone();
-                                    let author_for_initials = author_for_avatar.clone();
-                                    let initials = move || {
-                                        fmt::initials(
-                                            &author_for_initials()
-                                                .map(|u| u.display_name().unwrap_or_default())
-                                                .unwrap_or_default(),
-                                        )
-                                    };
-                                    // A button only where it leads somewhere.
-                                    if has_member_preview {
-                                        view! {
-                                            <button
-                                                type="button"
-                                                class=format!("avatar {}", avatar_hue)
-                                                aria-label=move || {
-                                                    format!(
-                                                        "View profile: {}",
-                                                        author_for_label()
-                                                            .map(|u| u.display_name().unwrap_or_default())
-                                                            .filter(|n| !n.is_empty())
-                                                            .unwrap_or_else(|| "Unknown".to_string()),
-                                                    )
-                                                }
-                                                on:click=open_profile_from_avatar
-                                            >
-                                                {initials}
-                                            </button>
-                                        }
-                                            .into_any()
-                                    } else {
-                                        view! {
-                                            <div class=format!("avatar {}", avatar_hue) aria-hidden="true">
-                                                {initials}
-                                            </div>
-                                        }
-                                            .into_any()
+                                    view! {
+                                        <AuthorAvatar
+                                            author=author
+                                            hue=avatar_hue
+                                            on_open_profile=open_profile_from_avatar
+                                        />
                                     }
                                 })}
                         </div>
@@ -272,29 +239,9 @@ pub(crate) fn MessageRow(
                             }
                                 .into_any()
                         } else {
-                            let author_name = move || {
-                                author_for_name()
-                                    .map(|u| u.display_name().unwrap_or_default())
-                                    .filter(|n| !n.is_empty())
-                                    .unwrap_or_else(|| "Unknown".to_string())
-                            };
                             view! {
                                 <div class="messageMeta">
-                                    {if has_member_preview {
-                                        view! {
-                                            <button
-                                                type="button"
-                                                class="messageAuthor"
-                                                title="View profile"
-                                                on:click=open_profile_from_name.clone()
-                                            >
-                                                {author_name}
-                                            </button>
-                                        }
-                                            .into_any()
-                                    } else {
-                                        view! { <span class="messageAuthor">{author_name}</span> }.into_any()
-                                    }}
+                                    <AuthorName author=author on_open_profile=open_profile_from_name />
                                     <span class="messageTime">{time_str.clone()}</span>
                                 </div>
                             }
@@ -490,6 +437,78 @@ pub(crate) fn MessageRow(
             </div>
         </div>
     }
+}
+
+/// The avatar cell at the head of a message group: the author's initials over
+/// a per-author hue.
+///
+/// Pure presentation, deliberately: everything shown comes in as props, so
+/// the component renders the same for a member's roster-lively session and
+/// for a guest whose list resolved the author by ref — it never reaches for
+/// the handshake itself. An unresolved author (`None`) renders the "?"
+/// initials and the "Unknown" profile label.
+#[component]
+fn AuthorAvatar(
+    /// The author's row as the list resolved it. Field reads are tracked, so
+    /// a display-name change the session does observe re-renders in place.
+    author: Signal<Option<UserView>>,
+    /// `hue-N` class from [`fmt::hue_class`] over the message's author REF id
+    /// — stable before, during and after resolution, which is what keeps a
+    /// row's colour from flickering while the name arrives.
+    hue: &'static str,
+    /// Opens the host's member preview. `None` — a host with no preview
+    /// surface — renders the avatar as inert decoration rather than a
+    /// button: a button only where it leads somewhere.
+    on_open_profile: Option<Callback<MouseEvent>>,
+) -> impl IntoView {
+    let initials =
+        move || fmt::initials(&author.get().map(|u| u.display_name().unwrap_or_default()).unwrap_or_default());
+    match on_open_profile {
+        Some(open_profile) => view! {
+            <button
+                type="button"
+                class=format!("avatar {}", hue)
+                aria-label=move || format!("View profile: {}", author_label(&author.get()))
+                on:click=move |e| open_profile.run(e)
+            >
+                {initials}
+            </button>
+        }
+            .into_any(),
+        None => view! {
+            <div class=format!("avatar {}", hue) aria-hidden="true">
+                {initials}
+            </div>
+        }
+            .into_any(),
+    }
+}
+
+/// The author's name in a group's meta line — same props, same "Unknown"
+/// fallback, and the same button-only-where-it-leads-somewhere rule as
+/// [`AuthorAvatar`].
+#[component]
+fn AuthorName(author: Signal<Option<UserView>>, on_open_profile: Option<Callback<MouseEvent>>) -> impl IntoView {
+    let name = move || author_label(&author.get());
+    match on_open_profile {
+        Some(open_profile) => view! {
+            <button type="button" class="messageAuthor" title="View profile" on:click=move |e| open_profile.run(e)>
+                {name}
+            </button>
+        }
+            .into_any(),
+        None => view! { <span class="messageAuthor">{name}</span> }.into_any(),
+    }
+}
+
+/// What a row calls its author out loud: the resolved display name, or the
+/// one fallback every unresolved (or unnamed) author shares.
+fn author_label(author: &Option<UserView>) -> String {
+    author
+        .as_ref()
+        .map(|u| u.display_name().unwrap_or_default())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "Unknown".to_string())
 }
 
 /// Embedded preview of the replied-to message: author + one-line

@@ -20,10 +20,11 @@ use crate::scroll_pane::ScrollPane;
 /// Mountable on its own. A page that shows exactly one room passes that room's
 /// id and never mounts a [`crate::RoomSelector`] at all.
 ///
-/// It takes an ID, not a room. Everything it needs beyond the id — the members
-/// list for author names, the read cursors — comes from the handshake, which
-/// owns them for the session and rebuilds them when the session moves. A host
-/// holds an id and nothing else.
+/// It takes an ID, not a room. Everything it needs beyond the id — the
+/// members list for mention names, the read cursors — comes from the
+/// handshake, which owns them for the session and rebuilds them when the
+/// session moves; author rows resolve inside the list, by ref. A host holds
+/// an id and nothing else.
 #[component]
 pub fn RoomLog(
     /// Which room to show, or none for the empty state.

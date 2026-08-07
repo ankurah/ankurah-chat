@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use leptos::prelude::*;
 
-use ankurah_chat_model::MessageView;
+use ankurah_chat_model::{MessageView, UserView};
 use ankurah_signals::Get as AnkurahGet;
 
 use crate::context::chat;
@@ -66,6 +66,72 @@ pub(crate) fn MessageList(
         Signal::derive(move || chat.viewer().map(|id| id.to_base64()))
     };
     let rows = Signal::derive(move || group_rows(&messages.get(), viewer.get()));
+
+    // Author rows for the window, resolved by REF — one `get_cached` per
+    // distinct author id, into one shared map every row reads. NOT the
+    // roster: `members()` lists the whole user collection, and listing is a
+    // member privilege — a signed-out reader's roster opens and stays empty,
+    // which rendered every author "Unknown". Following the message's own
+    // `user` ref is the one user read a guest session is allowed, and the
+    // local cache makes repeat authors and re-pagination free. An id the
+    // session cannot resolve — refused, absent, failed — maps to None, and
+    // its rows keep the "Unknown" fallback.
+    //
+    // SNAPSHOT SEMANTICS, ACCEPTED FOR NOW: a ref follow leaves no standing
+    // subscription behind, so for a guest a rename does not live-update the
+    // labels resolved here; members keep roster liveness where surfaces are
+    // still roster-driven (mentions, autocomplete, DMs). Live named-row
+    // reads are a planned later change, gated on a jwt-auth follow-up.
+    let authors = RwSignal::new(HashMap::<String, Option<UserView>>::new());
+    // Ids already resolved or in flight — the dedupe that makes a repeat
+    // author cost nothing. Discarded with the map when the session moves.
+    let requested = StoredValue::new(HashSet::<String>::new());
+    Effect::new({
+        let chat = chat.clone();
+        move |built_for: Option<u64>| {
+            // Tracked: a session swap rebuilds the map through the arriving
+            // context, exactly like the handshake's own queries.
+            let generation = chat.generation();
+            if built_for.is_some_and(|prev| prev != generation) {
+                requested.update_value(|r| r.clear());
+                authors.set(HashMap::new());
+            }
+            let ctx = chat.context_untracked();
+            let msgs = messages.get();
+            for message in msgs.iter() {
+                let Ok(user) = message.user() else { continue };
+                let id = user.id();
+                let id_b64 = id.to_base64();
+                // Some(false) = already resolved or in flight; None = the
+                // list was disposed under this very loop.
+                if requested.try_update_value(|r| r.insert(id_b64.clone())) != Some(true) {
+                    continue;
+                }
+                let ctx = ctx.clone();
+                let chat = chat.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let resolved = match ctx.get_cached::<UserView>(id).await {
+                        Ok(user) => Some(user),
+                        Err(e) => {
+                            tracing::warn!("Failed to resolve author {}: {}", id_b64, e);
+                            None
+                        }
+                    };
+                    // A resolution that outlived its session must not land
+                    // in the map the arriving session is filling.
+                    if chat.generation_untracked() != generation {
+                        return;
+                    }
+                    // try_update: the list may have been unmounted (room
+                    // switch) before the fetch resolved.
+                    let _ = authors.try_update(|m| {
+                        m.insert(id_b64, resolved);
+                    });
+                });
+            }
+            generation
+        }
+    });
 
     // Mention rendering: one id → display-name map shared by every row,
     // rebuilt when the users list (or any display name — View field reads are
@@ -164,10 +230,18 @@ pub(crate) fn MessageList(
                 children={
                     move |row: RowCtx| {
                         let viewer = row.viewer.clone();
+                        // This row's slice of the shared author map, as a
+                        // signal: resolution landing (or the session moving)
+                        // re-renders exactly the rows it names.
+                        let author = {
+                            let author_id = row.message.user().map(|r| r.id().to_base64()).unwrap_or_default();
+                            Signal::derive(move || authors.with(|m| m.get(&author_id).cloned().flatten()))
+                        };
                         view! {
                             <MessageRow
                                 message=row.message
                                 current_user_id=viewer
+                                author=author
                                 editing_message=editing_message
                                 replying_to=replying_to
                                 first_in_group=row.first_in_group
