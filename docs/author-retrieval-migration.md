@@ -32,17 +32,40 @@ What changes observably:
   `retrieve` on `user` to unauthenticated sessions**. Against an older
   policy the timeline renders exactly as before ("Unknown"), plus one
   `tracing` warning per unresolvable author id per session.
+- Signed-out readers now also see real **mention-chip names** and
+  **reply-preview author names/snippets** (previously "@unknown"/"Unknown"),
+  under the same `retrieve`-on-`user` grant — see the by-ref extension below.
 - **Snapshot semantics for guests**: a ref follow leaves no standing
   subscription, so a display-name change does not live-update a signed-out
-  reader's author labels. Member surfaces that still read the roster
-  (mention chips, composer autocomplete, DM names) keep their liveness.
-  Live named-row reads are a planned follow-up gated on a jwt-auth change.
+  reader's labels — author names, mention chips and reply-preview names
+  alike, all now resolved by ref. The member-only surfaces that still read
+  the roster (composer autocomplete, DM names) keep their liveness.
+  Live named reads for the by-ref surfaces are a planned follow-up gated on a
+  jwt-auth change.
 - Dependency floor is unchanged (`ankurah ^0.9.0`); a fresh resolve lands on
   0.9.2, which is also what the retrieve-aware server side ships with.
 
+## By-ref extension: mention chips and reply previews
+
+The message list's single by-ref resolver now feeds two more surfaces that
+used to read the roster, so a signed-out reader sees their names too:
+
+- **Mention chips** in message text: every mentioned id in the window (the
+  canonical `<@id>` scanner shared with the server) is resolved through the
+  same map; the id → display-name map the rows consume is built from those
+  resolutions instead of from `members()`.
+- **Reply previews**: the replied-to message's author name and the mention
+  tokens inside its one-line snippet, reached by first following the reply's
+  `re` ref to that message, then resolving its author (and its mentions).
+
+`MessageRow`'s props are unchanged — the `mention_names` map it takes has the
+same type; only its source moved. An id that will not resolve keeps the
+existing "@unknown"/"Unknown" fallback.
+
 ## What stays roster-backed, deliberately
 
-- Composer mention autocomplete, and mention-chip rendering in message text.
-- Reply-preview author names (they read the same mention-name map).
-- DM sidebar/conversation names (`display_name`) and other member-only
-  panels.
+- Composer mention autocomplete candidates (a member-only listing surface).
+- The DM sidebar, DM conversation names, and the DM message list: a private
+  thread is only ever visible to its two members, so the roster is always
+  populated there and there is no guest to strand.
+- Other member-only panels (e.g. the members list).
