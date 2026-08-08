@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use leptos::prelude::*;
 
-use ankurah_chat_model::{MessageView, UserView};
+use ankurah::EntityId;
+use ankurah_chat_model::{parse_mentions, MessageView, UserView};
 use ankurah_signals::Get as AnkurahGet;
 
 use crate::context::chat;
@@ -67,25 +68,38 @@ pub(crate) fn MessageList(
     };
     let rows = Signal::derive(move || group_rows(&messages.get(), viewer.get()));
 
-    // Author rows for the window, resolved by REF — one `get_cached` per
-    // distinct author id, into one shared map every row reads. NOT the
-    // roster: `members()` lists the whole user collection, and listing is a
-    // member privilege — a signed-out reader's roster opens and stays empty,
-    // which rendered every author "Unknown". Following the message's own
-    // `user` ref is the one user read a guest session is allowed, and the
-    // local cache makes repeat authors and re-pagination free. An id the
+    // Every user a row names, resolved by REF — one `get_cached` per distinct
+    // id, into one shared map every surface reads. Three kinds of id flow
+    // through this single lookup: the AUTHOR who wrote each row, everyone a
+    // row MENTIONS (the same `<@id>` tokens the body renders as chips), and
+    // the AUTHOR OF THE MESSAGE a row replies to (reached by first following
+    // the reply's `re` ref to that message). NOT the roster: `members()` lists
+    // the whole user collection, and listing is a member privilege — a
+    // signed-out reader's roster opens and stays empty, which rendered every
+    // author, mention chip and reply-preview name "Unknown". Following a
+    // message's own refs is the one user read a guest session is allowed, and
+    // the local cache makes repeat ids and re-pagination free. An id the
     // session cannot resolve — refused, absent, failed — maps to None, and
-    // its rows keep the "Unknown" fallback.
+    // its surfaces keep the "Unknown"/"@unknown" fallback.
     //
     // SNAPSHOT SEMANTICS, ACCEPTED FOR NOW: a ref follow leaves no standing
-    // subscription behind, so for a guest a rename does not live-update the
-    // labels resolved here; members keep roster liveness where surfaces are
-    // still roster-driven (mentions, autocomplete, DMs). Live named-row
-    // reads are a planned later change, gated on a jwt-auth follow-up.
+    // subscription behind, so a rename does not live-update the labels
+    // resolved here — author names, mention chips and reply-preview names
+    // alike. The roster-lively surfaces that remain (composer autocomplete,
+    // the members panel, DM threads — all members-only) keep their liveness.
+    // Live named reads here are a planned later change, gated on a jwt-auth
+    // follow-up.
     let authors = RwSignal::new(HashMap::<String, Option<UserView>>::new());
-    // Ids already resolved or in flight — the dedupe that makes a repeat
-    // author cost nothing. Discarded with the map when the session moves.
+    // Ids already resolved or in flight — the dedupe that makes a repeat id
+    // (an author who is also mentioned, a mention who also authors) cost
+    // nothing. Discarded with the map when the session moves.
     let requested = StoredValue::new(HashSet::<String>::new());
+    // Reply-target MESSAGE ids already followed. A replied-to message's author
+    // is only knowable AFTER that message resolves, so the user-id dedupe
+    // above cannot fire until then; this second set stops each re-run of the
+    // effect (a new message, a fresh page) from re-following the same targets.
+    // Cleared with `requested` on a session swap.
+    let requested_targets = StoredValue::new(HashSet::<String>::new());
     Effect::new({
         let chat = chat.clone();
         move |built_for: Option<u64>| {
@@ -94,62 +108,112 @@ pub(crate) fn MessageList(
             let generation = chat.generation();
             if built_for.is_some_and(|prev| prev != generation) {
                 requested.update_value(|r| r.clear());
+                requested_targets.update_value(|r| r.clear());
                 authors.set(HashMap::new());
             }
             let ctx = chat.context_untracked();
-            let msgs = messages.get();
-            for message in msgs.iter() {
-                let Ok(user) = message.user() else { continue };
-                let id = user.id();
-                let id_b64 = id.to_base64();
-                // Some(false) = already resolved or in flight; None = the
-                // list was disposed under this very loop.
-                if requested.try_update_value(|r| r.insert(id_b64.clone())) != Some(true) {
-                    continue;
-                }
+
+            // Resolve one user id into the shared map, once. The dedupe is on
+            // the id, so an id reached three ways — author, mention, reply-
+            // target author — costs a single read. The spawned fetch drops its
+            // write when the list was disposed mid-loop or the session moved
+            // on before it landed.
+            let resolve_user = {
                 let ctx = ctx.clone();
                 let chat = chat.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    let resolved = match ctx.get_cached::<UserView>(id).await {
-                        Ok(user) => Some(user),
-                        Err(e) => {
-                            tracing::warn!("Failed to resolve author {}: {}", id_b64, e);
-                            None
-                        }
-                    };
-                    // A resolution that outlived its session must not land
-                    // in the map the arriving session is filling.
-                    if chat.generation_untracked() != generation {
+                move |id: EntityId| {
+                    let id_b64 = id.to_base64();
+                    // Some(false) = already resolved or in flight; None = the
+                    // list was disposed under this very loop.
+                    if requested.try_update_value(|r| r.insert(id_b64.clone())) != Some(true) {
                         return;
                     }
-                    // try_update: the list may have been unmounted (room
-                    // switch) before the fetch resolved.
-                    let _ = authors.try_update(|m| {
-                        m.insert(id_b64, resolved);
+                    let ctx = ctx.clone();
+                    let chat = chat.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let resolved = match ctx.get_cached::<UserView>(id).await {
+                            Ok(user) => Some(user),
+                            Err(e) => {
+                                tracing::warn!("Failed to resolve user {}: {}", id_b64, e);
+                                None
+                            }
+                        };
+                        // A resolution that outlived its session must not land
+                        // in the map the arriving session is filling.
+                        if chat.generation_untracked() != generation {
+                            return;
+                        }
+                        // try_update: the list may have been unmounted (room
+                        // switch) before the fetch resolved.
+                        let _ = authors.try_update(|m| {
+                            m.insert(id_b64, resolved);
+                        });
                     });
-                });
+                }
+            };
+
+            let msgs = messages.get();
+            for message in msgs.iter() {
+                // The author who wrote this row.
+                if let Ok(user) = message.user() {
+                    resolve_user(user.id());
+                }
+                // Everyone this row mentions — the canonical `<@id>` scanner
+                // shared with the server, so a chip's name comes from the same
+                // map the author's does.
+                for id_b64 in parse_mentions(&message.text().unwrap_or_default()) {
+                    if let Ok(id) = EntityId::from_base64(&id_b64) {
+                        resolve_user(id);
+                    }
+                }
+                // The message this row replies to: naming its author, and the
+                // mentions inside its one-line snippet, needs that message
+                // first — so this is a two-hop follow through the same map.
+                // Deduped on the target id so re-runs do not re-follow it.
+                if let Ok(Some(target)) = message.re() {
+                    let target_id = target.id();
+                    if requested_targets.try_update_value(|r| r.insert(target_id.to_base64())) == Some(true) {
+                        let resolve_user = resolve_user.clone();
+                        let ctx = ctx.clone();
+                        let chat = chat.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            let Ok(original) = ctx.get::<MessageView>(target_id).await else { return };
+                            // The target outliving its session is dropped like
+                            // any other stale resolution.
+                            if chat.generation_untracked() != generation {
+                                return;
+                            }
+                            if let Ok(user) = original.user() {
+                                resolve_user(user.id());
+                            }
+                            for id_b64 in parse_mentions(&original.text().unwrap_or_default()) {
+                                if let Ok(id) = EntityId::from_base64(&id_b64) {
+                                    resolve_user(id);
+                                }
+                            }
+                        });
+                    }
+                }
             }
             generation
         }
     });
 
-    // Mention rendering: one id → display-name map shared by every row,
-    // rebuilt when the users list (or any display name — View field reads are
-    // tracked) changes. Rows' text closures read it through `.with`, so a
-    // rename re-renders mentions live without per-row user lookups.
-    let mention_names = Memo::new({
-        let chat = chat.clone();
-        move |_| {
-            chat.members()
-                .map(|q| q.get())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|u| {
-                    let name = u.display_name().unwrap_or_default();
-                    (!name.is_empty()).then(|| (u.id().to_base64(), name))
+    // Mention rendering: one id → display-name map shared by every row, built
+    // from the SAME by-ref resolutions above rather than the roster, so a chip
+    // resolves for a signed-out reader exactly as an author name does. Rows
+    // read it through `.with`, so a resolution landing (or the session moving)
+    // re-renders the chips it names; an id still resolving, or resolved to
+    // None, is simply absent and renders the "@unknown" fallback.
+    let mention_names = Memo::new(move |_| {
+        authors.with(|m| {
+            m.iter()
+                .filter_map(|(id, user)| {
+                    let name = user.as_ref()?.display_name().unwrap_or_default();
+                    (!name.is_empty()).then(|| (id.clone(), name))
                 })
                 .collect::<HashMap<String, String>>()
-        }
+        })
     });
 
     // Render-ready chips per message id, from the handshake's one standing
